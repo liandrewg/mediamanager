@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getAllRequests, updateRequest, getAdminStats, getUsers, updateUserRole, getHealthCheck } from '../api/requests'
+import { getAllRequests, updateRequest, getAdminStats, getUsers, updateUserRole, getHealthCheck, triggerJellyfinScan } from '../api/requests'
 import { getAllBacklog, updateBacklogItem, deleteBacklogItem, getBacklogStats } from '../api/backlog'
 import { getTunnelStatus, startTunnel, stopTunnel } from '../api/tunnel'
 import { useAuth } from '../context/AuthContext'
@@ -186,6 +186,10 @@ export default function AdminPage() {
     queryFn: getHealthCheck,
     enabled: tab === 'health',
     refetchInterval: tab === 'health' ? 30000 : false,
+  })
+
+  const scanMutation = useMutation({
+    mutationFn: triggerJellyfinScan,
   })
 
   const allRequests: any[] = data?.items || []
@@ -698,10 +702,27 @@ export default function AdminPage() {
                   <h3 className="text-white font-medium">Jellyfin</h3>
                 </div>
                 {healthData.jellyfin?.status === 'ok' ? (
-                  <div className="ml-6 space-y-1">
-                    <p className="text-sm text-slate-300">{healthData.jellyfin.server_name}</p>
-                    <p className="text-xs text-slate-400">Version {healthData.jellyfin.version}</p>
-                    <p className="text-xs text-slate-500">{healthData.jellyfin.url}</p>
+                  <div className="ml-6 space-y-2">
+                    <div className="space-y-1">
+                      <p className="text-sm text-slate-300">{healthData.jellyfin.server_name}</p>
+                      <p className="text-xs text-slate-400">Version {healthData.jellyfin.version}</p>
+                      <p className="text-xs text-slate-500">{healthData.jellyfin.url}</p>
+                    </div>
+                    <button
+                      onClick={() => scanMutation.mutate()}
+                      disabled={scanMutation.isPending}
+                      className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white px-4 py-1.5 rounded text-xs font-medium transition-colors"
+                    >
+                      {scanMutation.isPending ? 'Scanning...' : 'Scan Library'}
+                    </button>
+                    {scanMutation.isSuccess && (
+                      <p className="text-green-400 text-xs">Library scan started.</p>
+                    )}
+                    {scanMutation.isError && (
+                      <p className="text-red-400 text-xs">
+                        {(scanMutation.error as any)?.response?.data?.detail || 'Failed to start scan'}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="ml-6">

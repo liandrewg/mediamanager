@@ -159,3 +159,23 @@ async def health_check(admin: dict = Depends(require_admin)):
         checks["database"] = {"status": "error", "detail": str(e)}
 
     return checks
+
+
+@router.post("/jellyfin/scan")
+async def trigger_jellyfin_scan(admin: dict = Depends(require_admin)):
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{jellyfin_client.base_url}/Library/Refresh",
+                headers={
+                    "Authorization": jellyfin_client._auth_header(admin["jellyfin_token"]),
+                },
+            )
+            if resp.status_code == 204:
+                return {"status": "ok", "message": "Library scan started"}
+            elif resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Jellyfin session expired. Please log out and log back in.")
+            else:
+                raise HTTPException(status_code=resp.status_code, detail=f"Jellyfin returned {resp.status_code}")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail="Cannot connect to Jellyfin server")

@@ -55,3 +55,8 @@ export async function getHealthCheck() {
   const { data } = await client.get('/admin/health')
   return data
 }
+
+export async function triggerJellyfinScan() {
+  const { data } = await client.post('/admin/jellyfin/scan')
+  return data
+}
