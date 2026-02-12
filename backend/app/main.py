@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db, get_db_connection
-from app.routers import auth, tmdb, requests, jellyfin, admin
+from app.routers import auth, tmdb, requests, jellyfin, admin, backlog, tunnel
 from app.services.jellyfin_client import jellyfin_client
 from app.services.request_service import get_open_requests, auto_fulfill_request
 
@@ -96,6 +96,8 @@ app.include_router(tmdb.router, prefix="/api/tmdb", tags=["tmdb"])
 app.include_router(requests.router, prefix="/api/requests", tags=["requests"])
 app.include_router(jellyfin.router, prefix="/api/library", tags=["library"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
+app.include_router(tunnel.router, prefix="/api/admin/tunnel", tags=["tunnel"])
 
 
 @app.get("/api/health")

@@ -68,12 +68,14 @@ export default function DashboardPage() {
           </div>
           <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
             {myRequests.items.map((req: any) => (
-              <div key={req.id} className="flex items-center justify-between px-4 py-3">
-                <div>
-                  <span className="text-white text-sm">{req.title}</span>
-                  <span className="text-slate-500 text-xs ml-2 uppercase">{req.media_type}</span>
+              <div key={req.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <span className="text-white text-sm truncate block">{req.title}</span>
+                  <span className="text-slate-500 text-xs uppercase">{req.media_type}</span>
                 </div>
-                <RequestBadge status={req.status} />
+                <div className="flex-shrink-0">
+                  <RequestBadge status={req.status} />
+                </div>
               </div>
             ))}
           </div>

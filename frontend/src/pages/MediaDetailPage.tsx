@@ -46,15 +46,15 @@ export default function MediaDetailPage({ mediaType }: Props) {
     <div>
       {/* Backdrop */}
       {backdropUrl && (
-        <div className="relative -mx-8 -mt-8 mb-8 h-72 overflow-hidden">
+        <div className="relative -mx-4 -mt-4 md:-mx-8 md:-mt-8 mb-6 md:mb-8 h-48 md:h-72 overflow-hidden">
           <img src={backdropUrl} alt="" className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent" />
         </div>
       )}
 
-      <div className="flex flex-col md:flex-row gap-8">
+      <div className="flex flex-col md:flex-row gap-6 md:gap-8">
         {/* Poster */}
-        <div className="flex-shrink-0 w-56">
+        <div className="flex-shrink-0 w-40 mx-auto md:w-56 md:mx-0">
           {posterUrl ? (
             <img src={posterUrl} alt={data.title} className="w-full rounded-lg shadow-lg" />
           ) : (
@@ -66,7 +66,7 @@ export default function MediaDetailPage({ mediaType }: Props) {
 
         {/* Details */}
         <div className="flex-1">
-          <h1 className="text-3xl font-bold text-white">
+          <h1 className="text-2xl md:text-3xl font-bold text-white">
             {data.title} {year && <span className="text-slate-400 font-normal">({year})</span>}
           </h1>
 

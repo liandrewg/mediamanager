@@ -9,6 +9,7 @@ import MediaDetailPage from './pages/MediaDetailPage'
 import LibraryPage from './pages/LibraryPage'
 import MyRequestsPage from './pages/MyRequestsPage'
 import AdminPage from './pages/AdminPage'
+import ReportPage from './pages/ReportPage'
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
           <Route path="/tv/:tmdbId" element={<MediaDetailPage mediaType="tv" />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/my-requests" element={<MyRequestsPage />} />
+          <Route path="/report" element={<ReportPage />} />
           <Route element={<AdminRoute />}>
             <Route path="/admin" element={<AdminPage />} />
           </Route>

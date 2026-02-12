@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     secret_key: str = "change-me"
     database_url: str = "sqlite:///./mediamanager.db"
     cors_origins: str = "http://localhost:5173"
+    ngrok_authtoken: str = ""
+    ngrok_domain: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

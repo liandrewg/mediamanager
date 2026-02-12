@@ -52,6 +52,26 @@ def init_db():
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS backlog (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     TEXT NOT NULL,
+            username    TEXT NOT NULL,
+            type        TEXT NOT NULL DEFAULT 'bug'
+                            CHECK(type IN ('bug', 'feature')),
+            title       TEXT NOT NULL,
+            description TEXT,
+            status      TEXT NOT NULL DEFAULT 'reported'
+                            CHECK(status IN ('reported', 'triaged', 'in_progress', 'ready_for_test', 'resolved', 'wont_fix')),
+            priority    TEXT NOT NULL DEFAULT 'medium'
+                            CHECK(priority IN ('low', 'medium', 'high', 'critical')),
+            admin_note  TEXT,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_backlog_status ON backlog(status);
+        CREATE INDEX IF NOT EXISTS idx_backlog_type ON backlog(type);
+
         CREATE TABLE IF NOT EXISTS user_roles (
             user_id     TEXT PRIMARY KEY,
             username    TEXT NOT NULL,
@@ -62,4 +82,43 @@ def init_db():
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
+
+    # Migration: recreate backlog table if it lacks 'ready_for_test' status
+    try:
+        conn.execute("INSERT INTO backlog (user_id, username, title, status) VALUES ('__test__', '__test__', '__test__', 'ready_for_test')")
+        conn.execute("DELETE FROM backlog WHERE user_id = '__test__'")
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        # Need to recreate table with updated CHECK constraint
+        conn.executescript("""
+            ALTER TABLE backlog RENAME TO backlog_old;
+
+            CREATE TABLE backlog (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                username    TEXT NOT NULL,
+                type        TEXT NOT NULL DEFAULT 'bug'
+                                CHECK(type IN ('bug', 'feature')),
+                title       TEXT NOT NULL,
+                description TEXT,
+                status      TEXT NOT NULL DEFAULT 'reported'
+                                CHECK(status IN ('reported', 'triaged', 'in_progress', 'ready_for_test', 'resolved', 'wont_fix')),
+                priority    TEXT NOT NULL DEFAULT 'medium'
+                                CHECK(priority IN ('low', 'medium', 'high', 'critical')),
+                admin_note  TEXT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            INSERT INTO backlog (id, user_id, username, type, title, description, status, priority, admin_note, created_at, updated_at)
+                SELECT id, user_id, username, type, title, description, status, priority, admin_note, created_at, updated_at
+                FROM backlog_old;
+
+            DROP TABLE backlog_old;
+
+            CREATE INDEX IF NOT EXISTS idx_backlog_status ON backlog(status);
+            CREATE INDEX IF NOT EXISTS idx_backlog_type ON backlog(type);
+        """)
+
     conn.close()

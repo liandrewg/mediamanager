@@ -114,3 +114,28 @@ class LibraryStats(BaseModel):
     total_movies: int
     total_shows: int
     total_episodes: int
+
+
+# --- Backlog ---
+class BacklogCreate(BaseModel):
+    type: str = "bug"
+    title: str
+    description: Optional[str] = None
+
+class BacklogResponse(BaseModel):
+    id: int
+    user_id: str
+    username: str
+    type: str
+    title: str
+    description: Optional[str]
+    status: str
+    priority: str
+    admin_note: Optional[str]
+    created_at: str
+    updated_at: str
+
+class BacklogUpdate(BaseModel):
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    admin_note: Optional[str] = None
