@@ -157,6 +157,33 @@ def get_request_stats(conn: sqlite3.Connection) -> dict:
     }
 
 
+def get_open_requests(conn: sqlite3.Connection) -> list[dict]:
+    """Get all pending or approved requests (candidates for auto-fulfillment)."""
+    rows = conn.execute(
+        "SELECT * FROM requests WHERE status IN ('pending', 'approved')"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def auto_fulfill_request(conn: sqlite3.Connection, request_id: int) -> None:
+    """Mark a request as fulfilled by the system."""
+    now = datetime.utcnow().isoformat()
+    row = conn.execute("SELECT status FROM requests WHERE id = ?", (request_id,)).fetchone()
+    if not row:
+        return
+    old_status = row["status"]
+    conn.execute(
+        "UPDATE requests SET status = 'fulfilled', admin_note = 'Auto-fulfilled: found in library', updated_at = ? WHERE id = ?",
+        (now, request_id),
+    )
+    conn.execute(
+        """INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+           VALUES (?, ?, 'fulfilled', 'system', 'Auto-fulfilled: found in Jellyfin library')""",
+        (request_id, old_status),
+    )
+    conn.commit()
+
+
 def get_request_for_tmdb(
     conn: sqlite3.Connection, tmdb_id: int, media_type: str, user_id: str
 ) -> str | None:

@@ -1,13 +1,37 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 import httpx
+import logging
 
 from app.dependencies import get_current_user
 from app.schemas import TMDBSearchResult, TMDBMovieDetail, TMDBTvDetail
 from app.services.tmdb_client import tmdb_client
+from app.services.jellyfin_client import jellyfin_client
 from app.services.request_service import get_request_for_tmdb
 from app.database import get_db
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def check_in_library(user: dict, title: str, tmdb_id: int, media_type: str) -> bool:
+    """Check if a title exists in the Jellyfin library by searching and matching TMDB ID."""
+    try:
+        item_type = "Movie" if media_type == "movie" else "Series"
+        data = await jellyfin_client.get_items(
+            user_id=user["user_id"],
+            token=user["jellyfin_token"],
+            include_item_types=item_type,
+            search_term=title,
+            limit=10,
+        )
+        for item in data.get("Items", []):
+            provider_ids = item.get("ProviderIds", {})
+            if str(provider_ids.get("Tmdb", "")) == str(tmdb_id):
+                return True
+        return False
+    except Exception:
+        logger.debug("Failed to check Jellyfin library for %s", title)
+        return False
 
 
 @router.get("/search")
@@ -41,6 +65,7 @@ async def search(
         release_date = r.get("release_date") or r.get("first_air_date")
 
         existing_request = get_request_for_tmdb(db, tmdb_id, media_type, user["user_id"])
+        in_library = await check_in_library(user, title, tmdb_id, media_type)
 
         search_results.append(TMDBSearchResult(
             tmdb_id=tmdb_id,
@@ -51,6 +76,7 @@ async def search(
             release_date=release_date,
             vote_average=r.get("vote_average"),
             existing_request=existing_request,
+            already_in_library=in_library,
         ))
 
     return {
@@ -80,6 +106,7 @@ async def get_movie(
     ]
 
     existing_request = get_request_for_tmdb(db, tmdb_id, "movie", user["user_id"])
+    in_library = await check_in_library(user, data.get("title", ""), tmdb_id, "movie")
 
     return TMDBMovieDetail(
         tmdb_id=data["id"],
@@ -94,6 +121,7 @@ async def get_movie(
         vote_count=data.get("vote_count"),
         cast=cast,
         existing_request=existing_request,
+        already_in_library=in_library,
     )
 
 
@@ -116,6 +144,7 @@ async def get_tv_show(
     ]
 
     existing_request = get_request_for_tmdb(db, tmdb_id, "tv", user["user_id"])
+    in_library = await check_in_library(user, data.get("name", ""), tmdb_id, "tv")
 
     return TMDBTvDetail(
         tmdb_id=data["id"],
@@ -131,4 +160,5 @@ async def get_tv_show(
         vote_count=data.get("vote_count"),
         cast=cast,
         existing_request=existing_request,
+        already_in_library=in_library,
     )

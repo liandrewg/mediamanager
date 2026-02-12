@@ -51,5 +51,15 @@ def init_db():
             note        TEXT,
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id     TEXT PRIMARY KEY,
+            username    TEXT NOT NULL,
+            role        TEXT NOT NULL DEFAULT 'user'
+                            CHECK(role IN ('user', 'admin')),
+            granted_by  TEXT,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.close()

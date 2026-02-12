@@ -40,3 +40,13 @@ export async function getAdminStats() {
   const { data } = await client.get('/admin/stats')
   return data
 }
+
+export async function getUsers() {
+  const { data } = await client.get('/admin/users')
+  return data
+}
+
+export async function updateUserRole(userId: string, role: string) {
+  const { data } = await client.patch(`/admin/users/${userId}`, { role })
+  return data
+}
