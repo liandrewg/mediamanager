@@ -136,7 +136,9 @@ def init_db():
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
-        # Must disable FK checks because request_history references requests
+        # Must disable FK checks because request_history references requests.
+        # After renaming requests -> requests_old, SQLite updates request_history's
+        # FK to point at requests_old, so we must recreate request_history too.
         conn.executescript("""
             PRAGMA foreign_keys=OFF;
 
@@ -163,9 +165,51 @@ def init_db():
 
             DROP TABLE requests_old;
 
+            ALTER TABLE request_history RENAME TO request_history_old;
+
+            CREATE TABLE request_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id  INTEGER NOT NULL REFERENCES requests(id),
+                old_status  TEXT NOT NULL,
+                new_status  TEXT NOT NULL,
+                changed_by  TEXT NOT NULL,
+                note        TEXT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            INSERT INTO request_history SELECT * FROM request_history_old;
+
+            DROP TABLE request_history_old;
+
             CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id);
             CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
             CREATE INDEX IF NOT EXISTS idx_requests_tmdb_id ON requests(tmdb_id);
+
+            PRAGMA foreign_keys=ON;
+        """)
+
+    # Migration: fix request_history FK if it was broken by the books migration
+    # (points to requests_old which no longer exists)
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name='request_history'").fetchone()
+    if row and 'requests_old' in row[0]:
+        conn.executescript("""
+            PRAGMA foreign_keys=OFF;
+
+            ALTER TABLE request_history RENAME TO request_history_old;
+
+            CREATE TABLE request_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id  INTEGER NOT NULL REFERENCES requests(id),
+                old_status  TEXT NOT NULL,
+                new_status  TEXT NOT NULL,
+                changed_by  TEXT NOT NULL,
+                note        TEXT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            INSERT INTO request_history SELECT * FROM request_history_old;
+
+            DROP TABLE request_history_old;
 
             PRAGMA foreign_keys=ON;
         """)
