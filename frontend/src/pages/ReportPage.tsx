@@ -120,28 +120,28 @@ export default function ReportPage() {
           <div className="md:hidden space-y-3">
             {myReports.map((item: any) => (
               <div key={item.id} className="bg-slate-800 rounded-lg p-4 space-y-2">
-                <div className="flex items-start justify-between">
-                  <div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
                     <p className="text-sm font-medium text-white">{item.title}</p>
-                    <p className="text-xs text-slate-400 mt-0.5">
+                    <p className="text-xs text-slate-300 mt-0.5">
                       {new Date(item.created_at).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                      className={`text-xs px-2 py-0.5 rounded font-medium ${
                         item.type === 'bug'
-                          ? 'bg-red-600/30 text-red-300'
-                          : 'bg-purple-600/30 text-purple-300'
+                          ? 'bg-red-600/60 text-red-200'
+                          : 'bg-purple-600/60 text-purple-200'
                       }`}
                     >
                       {item.type}
                     </span>
-                    <span className="text-xs text-slate-300">{statusLabels[item.status] || item.status}</span>
+                    <span className="text-xs text-slate-200">{statusLabels[item.status] || item.status}</span>
                   </div>
                 </div>
                 {item.admin_note && (
-                  <p className="text-xs text-slate-400 italic border-l-2 border-slate-600 pl-2">{item.admin_note}</p>
+                  <p className="text-xs text-slate-300 border-l-2 border-slate-500 pl-2">{item.admin_note}</p>
                 )}
               </div>
             ))}
@@ -152,11 +152,11 @@ export default function ReportPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-slate-700">
-                  <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Type</th>
-                  <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Title</th>
-                  <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
-                  <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
-                  <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Admin Note</th>
+                  <th className="text-left px-4 py-3 text-sm text-slate-300 font-medium">Type</th>
+                  <th className="text-left px-4 py-3 text-sm text-slate-300 font-medium">Title</th>
+                  <th className="text-left px-4 py-3 text-sm text-slate-300 font-medium">Status</th>
+                  <th className="text-left px-4 py-3 text-sm text-slate-300 font-medium">Date</th>
+                  <th className="text-left px-4 py-3 text-sm text-slate-300 font-medium">Admin Note</th>
                 </tr>
               </thead>
               <tbody>
@@ -166,8 +166,8 @@ export default function ReportPage() {
                       <span
                         className={`text-xs px-2 py-1 rounded font-medium ${
                           item.type === 'bug'
-                            ? 'bg-red-600/30 text-red-300'
-                            : 'bg-purple-600/30 text-purple-300'
+                            ? 'bg-red-600/60 text-red-200'
+                            : 'bg-purple-600/60 text-purple-200'
                         }`}
                       >
                         {item.type}
@@ -175,12 +175,12 @@ export default function ReportPage() {
                     </td>
                     <td className="px-4 py-3 text-white text-sm">{item.title}</td>
                     <td className="px-4 py-3">
-                      <span className="text-xs text-slate-300">{statusLabels[item.status] || item.status}</span>
+                      <span className="text-sm text-slate-200">{statusLabels[item.status] || item.status}</span>
                     </td>
-                    <td className="px-4 py-3 text-slate-400 text-sm">
+                    <td className="px-4 py-3 text-slate-300 text-sm">
                       {new Date(item.created_at).toLocaleDateString()}
                     </td>
-                    <td className="px-4 py-3 text-slate-400 text-sm">{item.admin_note || '-'}</td>
+                    <td className="px-4 py-3 text-slate-300 text-sm">{item.admin_note || '-'}</td>
                   </tr>
                 ))}
               </tbody>
