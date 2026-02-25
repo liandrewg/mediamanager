@@ -8,10 +8,21 @@ venv/
 
 # Environment
 .env
+.env.local
+.env.*.local
+
+# Secrets
+*.key
+*.pem
+*.secret
+*.p12
+*.pfx
 
 # Node
 node_modules/
 dist/
+coverage/
+.nyc_output/
 
 # Logs
 *.log
