@@ -28,7 +28,7 @@ def init_db():
             user_id     TEXT NOT NULL,
             username    TEXT NOT NULL,
             tmdb_id     INTEGER NOT NULL,
-            media_type  TEXT NOT NULL CHECK(media_type IN ('movie', 'tv')),
+            media_type  TEXT NOT NULL CHECK(media_type IN ('movie', 'tv', 'book')),
             title       TEXT NOT NULL,
             poster_path TEXT,
             status      TEXT NOT NULL DEFAULT 'pending'
@@ -51,6 +51,18 @@ def init_db():
             note        TEXT,
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS request_supporters (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id  INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+            user_id     TEXT NOT NULL,
+            username    TEXT NOT NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(request_id, user_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_request_supporters_request_id ON request_supporters(request_id);
+        CREATE INDEX IF NOT EXISTS idx_request_supporters_user_id ON request_supporters(user_id);
 
         CREATE TABLE IF NOT EXISTS backlog (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +110,6 @@ def init_db():
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
-        # Need to recreate table with updated CHECK constraint
         conn.executescript("""
             ALTER TABLE backlog RENAME TO backlog_old;
 
@@ -136,9 +147,6 @@ def init_db():
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
-        # Must disable FK checks because request_history references requests.
-        # After renaming requests -> requests_old, SQLite updates request_history's
-        # FK to point at requests_old, so we must recreate request_history too.
         conn.executescript("""
             PRAGMA foreign_keys=OFF;
 
@@ -189,7 +197,6 @@ def init_db():
         """)
 
     # Migration: fix request_history FK if it was broken by the books migration
-    # (points to requests_old which no longer exists)
     row = conn.execute("SELECT sql FROM sqlite_master WHERE name='request_history'").fetchone()
     if row and 'requests_old' in row[0]:
         conn.executescript("""
@@ -213,5 +220,27 @@ def init_db():
 
             PRAGMA foreign_keys=ON;
         """)
+
+    # Migration: ensure request_supporters exists in older DBs and backfill owners.
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS request_supporters (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id  INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+            user_id     TEXT NOT NULL,
+            username    TEXT NOT NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(request_id, user_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_request_supporters_request_id ON request_supporters(request_id);
+        CREATE INDEX IF NOT EXISTS idx_request_supporters_user_id ON request_supporters(user_id);
+    """)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO request_supporters (request_id, user_id, username, created_at)
+        SELECT id, user_id, username, created_at FROM requests
+        """
+    )
+    conn.commit()
 
     conn.close()

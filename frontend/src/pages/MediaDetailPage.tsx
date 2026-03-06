@@ -40,6 +40,7 @@ export default function MediaDetailPage({ mediaType }: Props) {
   const backdropUrl = data.backdrop_path ? `${TMDB_IMG}/w1280${data.backdrop_path}` : null
   const posterUrl = data.poster_path ? `${TMDB_IMG}/w300${data.poster_path}` : null
   const year = (data.release_date || data.first_air_date || '').split('-')[0]
+  const hasCommunityRequest = !!data.community_request_id && !!data.community_request_status
   const canRequest = !data.existing_request && !data.already_in_library
 
   return (
@@ -90,34 +91,57 @@ export default function MediaDetailPage({ mediaType }: Props) {
           {data.overview && <p className="mt-4 text-slate-300 leading-relaxed">{data.overview}</p>}
 
           {/* Action buttons */}
-          <div className="mt-6 flex items-center gap-4">
-            {data.already_in_library && (
-              <span className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
-                Already in Library
-              </span>
-            )}
-            {data.existing_request && (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-slate-400">Request status:</span>
-                <RequestBadge status={data.existing_request} />
+          <div className="mt-6 space-y-3">
+            <div className="flex flex-wrap items-center gap-4">
+              {data.already_in_library && (
+                <span className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+                  Already in Library
+                </span>
+              )}
+              {data.existing_request && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-slate-400">Your request:</span>
+                  <RequestBadge status={data.existing_request} />
+                </div>
+              )}
+              {canRequest && (
+                <button
+                  onClick={() => requestMutation.mutate()}
+                  disabled={requestMutation.isPending}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+                >
+                  {requestMutation.isPending
+                    ? hasCommunityRequest
+                      ? 'Joining...'
+                      : 'Requesting...'
+                    : hasCommunityRequest
+                      ? 'Join Request'
+                      : 'Request'}
+                </button>
+              )}
+            </div>
+
+            {hasCommunityRequest && !data.already_in_library && (
+              <div className="bg-slate-800/80 border border-slate-700 rounded-lg px-4 py-3">
+                <p className="text-sm text-slate-200">
+                  Community queue: <RequestBadge status={data.community_request_status} />
+                  <span className="text-slate-400 ml-2">{data.community_supporters} supporter{data.community_supporters === 1 ? '' : 's'}</span>
+                </p>
+                {!data.user_supporting && !data.existing_request && (
+                  <p className="text-xs text-slate-400 mt-1">Join this request to increase its priority for admins.</p>
+                )}
               </div>
             )}
-            {canRequest && (
-              <button
-                onClick={() => requestMutation.mutate()}
-                disabled={requestMutation.isPending}
-                className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white px-6 py-2 rounded-lg font-medium transition-colors"
-              >
-                {requestMutation.isPending ? 'Requesting...' : 'Request'}
-              </button>
-            )}
+
             {requestMutation.isError && (
-              <span className="text-red-400 text-sm">
+              <span className="text-red-400 text-sm block">
                 {(requestMutation.error as any)?.response?.data?.detail || 'Failed to submit request'}
               </span>
             )}
             {requestMutation.isSuccess && (
-              <span className="text-green-400 text-sm">Request submitted!</span>
+              <span className="text-green-400 text-sm block">
+                {hasCommunityRequest ? 'Added your support to this request!' : 'Request submitted!'}
+              </span>
             )}
           </div>
 

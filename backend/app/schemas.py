@@ -38,6 +38,9 @@ class RequestResponse(BaseModel):
     poster_path: Optional[str]
     status: str
     admin_note: Optional[str]
+    supporter_count: int = 1
+    is_owner: bool = False
+    user_supporting: bool = False
     created_at: str
     updated_at: str
 
@@ -82,6 +85,10 @@ class TMDBMovieDetail(BaseModel):
     cast: list[dict] = []
     already_in_library: bool = False
     existing_request: Optional[str] = None
+    community_request_id: Optional[int] = None
+    community_request_status: Optional[str] = None
+    community_supporters: int = 0
+    user_supporting: bool = False
 
 
 class TMDBTvDetail(BaseModel):
@@ -99,6 +106,10 @@ class TMDBTvDetail(BaseModel):
     cast: list[dict] = []
     already_in_library: bool = False
     existing_request: Optional[str] = None
+    community_request_id: Optional[int] = None
+    community_request_status: Optional[str] = None
+    community_supporters: int = 0
+    user_supporting: bool = False
 
 
 # --- Library ---

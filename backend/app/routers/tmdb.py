@@ -6,7 +6,7 @@ from app.dependencies import get_current_user
 from app.schemas import TMDBSearchResult, TMDBMovieDetail, TMDBTvDetail
 from app.services.tmdb_client import tmdb_client
 from app.services.jellyfin_client import jellyfin_client
-from app.services.request_service import get_request_for_tmdb
+from app.services.request_service import get_request_for_tmdb, get_community_request
 from app.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,7 @@ async def get_movie(
     ]
 
     existing_request = get_request_for_tmdb(db, tmdb_id, "movie", user["user_id"])
+    community_request = get_community_request(db, tmdb_id, "movie", user["user_id"])
     in_library = await check_in_library(user, data.get("title", ""), tmdb_id, "movie")
 
     return TMDBMovieDetail(
@@ -121,6 +122,10 @@ async def get_movie(
         vote_count=data.get("vote_count"),
         cast=cast,
         existing_request=existing_request,
+        community_request_id=community_request["id"] if community_request else None,
+        community_request_status=community_request["status"] if community_request else None,
+        community_supporters=community_request["supporter_count"] if community_request else 0,
+        user_supporting=community_request["user_supporting"] if community_request else False,
         already_in_library=in_library,
     )
 
@@ -144,6 +149,7 @@ async def get_tv_show(
     ]
 
     existing_request = get_request_for_tmdb(db, tmdb_id, "tv", user["user_id"])
+    community_request = get_community_request(db, tmdb_id, "tv", user["user_id"])
     in_library = await check_in_library(user, data.get("name", ""), tmdb_id, "tv")
 
     return TMDBTvDetail(
@@ -160,5 +166,9 @@ async def get_tv_show(
         vote_count=data.get("vote_count"),
         cast=cast,
         existing_request=existing_request,
+        community_request_id=community_request["id"] if community_request else None,
+        community_request_status=community_request["status"] if community_request else None,
+        community_supporters=community_request["supporter_count"] if community_request else 0,
+        user_supporting=community_request["user_supporting"] if community_request else False,
         already_in_library=in_library,
     )

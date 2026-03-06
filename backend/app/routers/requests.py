@@ -46,10 +46,10 @@ async def get_request(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    result = request_service.get_request_by_id(db, request_id)
+    result = request_service.get_request_by_id(db, request_id, user["user_id"])
     if not result:
         raise HTTPException(status_code=404, detail="Request not found")
-    if result["user_id"] != user["user_id"] and not user.get("is_admin"):
+    if not result.get("user_supporting") and not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Access denied")
     return result
 
@@ -62,6 +62,6 @@ async def cancel_request(
 ):
     try:
         request_service.delete_request(db, request_id, user["user_id"])
-        return {"message": "Request cancelled"}
+        return {"message": "Request support removed"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

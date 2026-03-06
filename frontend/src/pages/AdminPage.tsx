@@ -337,6 +337,7 @@ export default function AdminPage() {
                                 {req.username} &middot; {req.media_type.toUpperCase()} &middot;{' '}
                                 {new Date(req.created_at).toLocaleDateString()}
                               </p>
+                              <p className="text-xs text-slate-500 mt-0.5">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
                             </div>
                           </div>
                           {req.admin_note && (
@@ -376,6 +377,7 @@ export default function AdminPage() {
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Title</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Type</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">User</th>
+                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Supporters</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Note</th>
@@ -390,6 +392,7 @@ export default function AdminPage() {
                         <td className="px-4 py-3 text-white text-sm">{req.title}</td>
                         <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
                         <td className="px-4 py-3 text-slate-300 text-sm">{req.username}</td>
+                        <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}</td>
                         <td className="px-4 py-3">
                           <RequestBadge status={req.status} />
                         </td>

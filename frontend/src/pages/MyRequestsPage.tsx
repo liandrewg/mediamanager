@@ -71,12 +71,13 @@ export default function MyRequestsPage() {
               {req.admin_note && (
                 <p className="text-xs text-slate-400 italic border-l-2 border-slate-600 pl-2">{req.admin_note}</p>
               )}
+              <p className="text-xs text-slate-500">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
               {req.status === 'pending' && (
                 <button
                   onClick={() => cancelMutation.mutate(req.id)}
                   className="text-red-400 hover:text-red-300 text-sm"
                 >
-                  Cancel
+                  {req.is_owner ? 'Cancel request' : 'Remove support'}
                 </button>
               )}
             </div>
@@ -95,6 +96,7 @@ export default function MyRequestsPage() {
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Type</th>
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
+                  <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Supporters</th>
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Note</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -110,6 +112,7 @@ export default function MyRequestsPage() {
                     <td className="px-4 py-3 text-slate-400 text-sm">
                       {new Date(req.created_at).toLocaleDateString()}
                     </td>
+                    <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}</td>
                     <td className="px-4 py-3 text-slate-400 text-sm">{req.admin_note || '-'}</td>
                     <td className="px-4 py-3">
                       {req.status === 'pending' && (
@@ -117,7 +120,7 @@ export default function MyRequestsPage() {
                           onClick={() => cancelMutation.mutate(req.id)}
                           className="text-red-400 hover:text-red-300 text-sm"
                         >
-                          Cancel
+                          {req.is_owner ? 'Cancel request' : 'Remove support'}
                         </button>
                       )}
                     </td>
