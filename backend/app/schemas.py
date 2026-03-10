@@ -41,6 +41,8 @@ class RequestResponse(BaseModel):
     supporter_count: int = 1
     is_owner: bool = False
     user_supporting: bool = False
+    jellyfin_item_id: Optional[str] = None
+    watch_url: Optional[str] = None
     created_at: str
     updated_at: str
 

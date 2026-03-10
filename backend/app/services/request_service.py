@@ -2,6 +2,8 @@ import sqlite3
 import math
 from datetime import datetime
 
+from app.config import settings
+
 
 OPEN_REQUEST_STATUSES = ("pending", "approved")
 
@@ -21,6 +23,13 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
                 (req["id"], user_id),
             ).fetchone()
         )
+    # Generate watch URL if jellyfin_item_id is set
+    jellyfin_item_id = req.get("jellyfin_item_id")
+    if jellyfin_item_id:
+        base = settings.jellyfin_url.rstrip("/")
+        req["watch_url"] = f"{base}/web/index.html#!/details?id={jellyfin_item_id}"
+    else:
+        req["watch_url"] = None
     return req
 
 
@@ -178,6 +187,7 @@ def update_request_status(
     new_status: str,
     changed_by: str,
     admin_note: str | None = None,
+    jellyfin_item_id: str | None = None,
 ) -> dict:
     row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
     if not row:
@@ -186,10 +196,16 @@ def update_request_status(
     old_status = row["status"]
     now = datetime.utcnow().isoformat()
 
-    conn.execute(
-        "UPDATE requests SET status = ?, admin_note = ?, updated_at = ? WHERE id = ?",
-        (new_status, admin_note, now, request_id),
-    )
+    if jellyfin_item_id is not None:
+        conn.execute(
+            "UPDATE requests SET status = ?, admin_note = ?, jellyfin_item_id = ?, updated_at = ? WHERE id = ?",
+            (new_status, admin_note, jellyfin_item_id, now, request_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE requests SET status = ?, admin_note = ?, updated_at = ? WHERE id = ?",
+            (new_status, admin_note, now, request_id),
+        )
     conn.execute(
         """INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
            VALUES (?, ?, ?, ?, ?)""",

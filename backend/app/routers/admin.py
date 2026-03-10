@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 import httpx
 
-from app.dependencies import require_admin
+from app.dependencies import require_admin, get_current_user
 from app.database import get_db
 from app.schemas import RequestUpdate, RequestResponse, PaginatedResponse
 from app.services import request_service
@@ -37,13 +37,62 @@ async def update_request(
 ):
     if body.status not in ("approved", "denied", "fulfilled", "pending"):
         raise HTTPException(status_code=400, detail="Invalid status")
+
+    # When fulfilling, auto-search Jellyfin for a matching item
+    jellyfin_item_id: str | None = None
+    if body.status == "fulfilled":
+        row = db.execute("SELECT title, media_type, jellyfin_item_id FROM requests WHERE id = ?", (request_id,)).fetchone()
+        if row:
+            # Only auto-link if not already linked
+            if not row["jellyfin_item_id"] and row["media_type"] in ("movie", "tv"):
+                try:
+                    match = await jellyfin_client.search_item_by_title(
+                        user_id=admin["user_id"],
+                        token=admin["jellyfin_token"],
+                        title=row["title"],
+                        media_type=row["media_type"],
+                    )
+                    if match:
+                        jellyfin_item_id = match["Id"]
+                except Exception:
+                    pass  # Non-fatal — fulfill without link
+            else:
+                jellyfin_item_id = row["jellyfin_item_id"]  # preserve existing
+
     try:
         result = request_service.update_request_status(
-            db, request_id, body.status, admin["user_id"], body.admin_note
+            db, request_id, body.status, admin["user_id"], body.admin_note,
+            jellyfin_item_id=jellyfin_item_id,
         )
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+class JellyfinLinkUpdate(BaseModel):
+    jellyfin_item_id: str | None = None
+
+
+@router.patch("/requests/{request_id}/jellyfin-link", response_model=RequestResponse)
+async def update_jellyfin_link(
+    request_id: int,
+    body: JellyfinLinkUpdate,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    """Manually set or clear the Jellyfin item ID for a fulfilled request."""
+    row = db.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    from datetime import datetime
+    now = datetime.utcnow().isoformat()
+    db.execute(
+        "UPDATE requests SET jellyfin_item_id = ?, updated_at = ? WHERE id = ?",
+        (body.jellyfin_item_id, now, request_id),
+    )
+    db.commit()
+    return request_service.get_request_by_id(db, request_id)
 
 
 @router.get("/stats")

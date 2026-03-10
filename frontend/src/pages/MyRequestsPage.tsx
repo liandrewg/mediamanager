@@ -4,6 +4,22 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getMyRequests, deleteRequest } from '../api/requests'
 import RequestBadge from '../components/RequestBadge'
 
+function WatchNowButton({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-xs font-semibold rounded-full transition-colors"
+    >
+      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" />
+      </svg>
+      Watch Now
+    </a>
+  )
+}
+
 export default function MyRequestsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const queryClient = useQueryClient()
@@ -72,14 +88,22 @@ export default function MyRequestsPage() {
                 <p className="text-xs text-slate-400 italic border-l-2 border-slate-600 pl-2">{req.admin_note}</p>
               )}
               <p className="text-xs text-slate-500">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
-              {req.status === 'pending' && (
-                <button
-                  onClick={() => cancelMutation.mutate(req.id)}
-                  className="text-red-400 hover:text-red-300 text-sm"
-                >
-                  {req.is_owner ? 'Cancel request' : 'Remove support'}
-                </button>
-              )}
+              <div className="flex items-center gap-3">
+                {req.watch_url && (
+                  <WatchNowButton url={req.watch_url} />
+                )}
+                {req.status === 'fulfilled' && !req.watch_url && (
+                  <span className="text-xs text-slate-500 italic">Link pending</span>
+                )}
+                {req.status === 'pending' && (
+                  <button
+                    onClick={() => cancelMutation.mutate(req.id)}
+                    className="text-red-400 hover:text-red-300 text-sm"
+                  >
+                    {req.is_owner ? 'Cancel request' : 'Remove support'}
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -115,14 +139,18 @@ export default function MyRequestsPage() {
                     <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}</td>
                     <td className="px-4 py-3 text-slate-400 text-sm">{req.admin_note || '-'}</td>
                     <td className="px-4 py-3">
-                      {req.status === 'pending' && (
+                      {req.watch_url ? (
+                        <WatchNowButton url={req.watch_url} />
+                      ) : req.status === 'fulfilled' ? (
+                        <span className="text-xs text-slate-500 italic">Link pending</span>
+                      ) : req.status === 'pending' ? (
                         <button
                           onClick={() => cancelMutation.mutate(req.id)}
                           className="text-red-400 hover:text-red-300 text-sm"
                         >
                           {req.is_owner ? 'Cancel request' : 'Remove support'}
                         </button>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 ))}

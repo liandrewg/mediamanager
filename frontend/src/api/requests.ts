@@ -60,3 +60,9 @@ export async function triggerJellyfinScan() {
   const { data } = await client.post('/admin/jellyfin/scan')
   return data
 }
+
+
+export async function updateJellyfinLink(id: number, jellyfin_item_id: string | null) {
+  const { data } = await client.patch(`/admin/requests/${id}/jellyfin-link`, { jellyfin_item_id })
+  return data
+}

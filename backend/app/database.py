@@ -243,4 +243,11 @@ def init_db():
     )
     conn.commit()
 
+    # Migration: add jellyfin_item_id to requests table
+    try:
+        conn.execute("SELECT jellyfin_item_id FROM requests LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE requests ADD COLUMN jellyfin_item_id TEXT")
+        conn.commit()
+
     conn.close()

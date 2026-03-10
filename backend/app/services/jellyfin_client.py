@@ -91,6 +91,35 @@ class JellyfinClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def search_item_by_title(
+        self,
+        user_id: str,
+        token: str,
+        title: str,
+        media_type: str,
+    ) -> dict | None:
+        """Search Jellyfin library for an item by title. Returns the best match or None."""
+        include_types = "Movie" if media_type == "movie" else "Series"
+        try:
+            data = await self.get_items(
+                user_id=user_id,
+                token=token,
+                include_item_types=include_types,
+                search_term=title,
+                limit=5,
+            )
+            items = data.get("Items", [])
+            if not items:
+                return None
+            # Return the first (best) match
+            return items[0]
+        except Exception:
+            return None
+
+    def get_watch_url(self, item_id: str) -> str:
+        """Return the Jellyfin web player deep-link for a given item."""
+        return f"{self.base_url}/web/index.html#!/details?id={item_id}"
+
     def get_image_url(self, item_id: str, image_type: str = "Primary") -> str:
         return f"{self.base_url}/Items/{item_id}/Images/{image_type}"
 

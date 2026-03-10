@@ -345,6 +345,20 @@ export default function AdminPage() {
                               {req.admin_note}
                             </p>
                           )}
+                          {req.watch_url && (
+                            <a
+                              href={req.watch_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors"
+                            >
+                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" /></svg>
+                              Watch in Jellyfin
+                            </a>
+                          )}
+                          {req.status === 'fulfilled' && !req.watch_url && (
+                            <p className="text-xs text-amber-500/70 italic">⚠ No Jellyfin link</p>
+                          )}
                           {transitions.length > 0 && (
                             <div className="flex flex-wrap gap-1.5 pt-1">
                               {transitions.map((t) => (
@@ -381,6 +395,7 @@ export default function AdminPage() {
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Note</th>
+                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Watch</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Move to</th>
                   </tr>
                 </thead>
@@ -401,6 +416,23 @@ export default function AdminPage() {
                         </td>
                         <td className="px-4 py-3 text-slate-400 text-sm max-w-48 truncate">
                           {req.admin_note || '-'}
+                        </td>
+                        <td className="px-4 py-3">
+                          {req.watch_url ? (
+                            <a
+                              href={req.watch_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors"
+                            >
+                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" /></svg>
+                              Watch
+                            </a>
+                          ) : req.status === 'fulfilled' ? (
+                            <span className="text-xs text-amber-500/60">No link</span>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex gap-1.5">
