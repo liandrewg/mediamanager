@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getMyRequests, deleteRequest } from '../api/requests'
 import RequestBadge from '../components/RequestBadge'
+import RequestComments from '../components/RequestComments'
 
 function WatchNowButton({ url }: { url: string }) {
   return (
@@ -22,7 +23,17 @@ function WatchNowButton({ url }: { url: string }) {
 
 export default function MyRequestsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('')
+  const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
   const queryClient = useQueryClient()
+
+  const toggleComments = (id: number) => {
+    setExpandedComments((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: ['myRequests', statusFilter],
@@ -88,7 +99,7 @@ export default function MyRequestsPage() {
                 <p className="text-xs text-slate-400 italic border-l-2 border-slate-600 pl-2">{req.admin_note}</p>
               )}
               <p className="text-xs text-slate-500">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 {req.watch_url && (
                   <WatchNowButton url={req.watch_url} />
                 )}
@@ -103,7 +114,14 @@ export default function MyRequestsPage() {
                     {req.is_owner ? 'Cancel request' : 'Remove support'}
                   </button>
                 )}
+                <button
+                  onClick={() => toggleComments(req.id)}
+                  className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
+                >
+                  {expandedComments.has(req.id) ? '▲ Hide comments' : '💬 Comments'}
+                </button>
               </div>
+              {expandedComments.has(req.id) && <RequestComments requestId={req.id} />}
             </div>
           ))}
         </div>
@@ -127,32 +145,49 @@ export default function MyRequestsPage() {
               </thead>
               <tbody>
                 {requests.map((req: any) => (
-                  <tr key={req.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                    <td className="px-4 py-3 text-white text-sm">{req.title}</td>
-                    <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
-                    <td className="px-4 py-3">
-                      <RequestBadge status={req.status} />
-                    </td>
-                    <td className="px-4 py-3 text-slate-400 text-sm">
-                      {new Date(req.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}</td>
-                    <td className="px-4 py-3 text-slate-400 text-sm">{req.admin_note || '-'}</td>
-                    <td className="px-4 py-3">
-                      {req.watch_url ? (
-                        <WatchNowButton url={req.watch_url} />
-                      ) : req.status === 'fulfilled' ? (
-                        <span className="text-xs text-slate-500 italic">Link pending</span>
-                      ) : req.status === 'pending' ? (
-                        <button
-                          onClick={() => cancelMutation.mutate(req.id)}
-                          className="text-red-400 hover:text-red-300 text-sm"
-                        >
-                          {req.is_owner ? 'Cancel request' : 'Remove support'}
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
+                  <>
+                    <tr key={req.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                      <td className="px-4 py-3 text-white text-sm">{req.title}</td>
+                      <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
+                      <td className="px-4 py-3">
+                        <RequestBadge status={req.status} />
+                      </td>
+                      <td className="px-4 py-3 text-slate-400 text-sm">
+                        {new Date(req.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}</td>
+                      <td className="px-4 py-3 text-slate-400 text-sm">{req.admin_note || '-'}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          {req.watch_url ? (
+                            <WatchNowButton url={req.watch_url} />
+                          ) : req.status === 'fulfilled' ? (
+                            <span className="text-xs text-slate-500 italic">Link pending</span>
+                          ) : req.status === 'pending' ? (
+                            <button
+                              onClick={() => cancelMutation.mutate(req.id)}
+                              className="text-red-400 hover:text-red-300 text-sm"
+                            >
+                              {req.is_owner ? 'Cancel request' : 'Remove support'}
+                            </button>
+                          ) : null}
+                          <button
+                            onClick={() => toggleComments(req.id)}
+                            className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
+                          >
+                            {expandedComments.has(req.id) ? '▲ Hide' : '💬'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {expandedComments.has(req.id) && (
+                      <tr key={`comments-${req.id}`} className="border-b border-slate-700/50 bg-slate-800/50">
+                        <td colSpan={7} className="px-4 py-2">
+                          <RequestComments requestId={req.id} />
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </tbody>
             </table>

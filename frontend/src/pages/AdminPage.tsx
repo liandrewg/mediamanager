@@ -6,6 +6,7 @@ import { getTunnelStatus, startTunnel, stopTunnel } from '../api/tunnel'
 import { useAuth } from '../context/AuthContext'
 import RequestBadge from '../components/RequestBadge'
 import StatsCard from '../components/StatsCard'
+import RequestComments from '../components/RequestComments'
 
 const COLUMNS = [
   { key: 'pending', label: 'Pending', color: 'border-yellow-500', bg: 'bg-yellow-500/10' },
@@ -80,6 +81,16 @@ export default function AdminPage() {
   const [view, setView] = useState<'board' | 'table'>('board')
   const [noteModal, setNoteModal] = useState<{ id: number; status: string } | null>(null)
   const [noteText, setNoteText] = useState('')
+  const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
+
+  const toggleComments = (id: number) => {
+    setExpandedComments((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
   const queryClient = useQueryClient()
   const { user: currentUser } = useAuth()
 
@@ -372,6 +383,15 @@ export default function AdminPage() {
                                 </button>
                               ))}
                             </div>
+                          )}
+                          <button
+                            onClick={() => toggleComments(req.id)}
+                            className="text-xs text-slate-500 hover:text-blue-400 transition-colors pt-0.5"
+                          >
+                            {expandedComments.has(req.id) ? '▲ Hide comments' : '💬 Comments'}
+                          </button>
+                          {expandedComments.has(req.id) && (
+                            <RequestComments requestId={req.id} />
                           )}
                         </div>
                       ))}

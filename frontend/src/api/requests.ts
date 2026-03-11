@@ -66,3 +66,29 @@ export async function updateJellyfinLink(id: number, jellyfin_item_id: string | 
   const { data } = await client.patch(`/admin/requests/${id}/jellyfin-link`, { jellyfin_item_id })
   return data
 }
+
+// --- Comments ---
+
+export interface Comment {
+  id: number
+  request_id: number
+  user_id: string
+  username: string
+  is_admin: boolean
+  body: string
+  created_at: string
+}
+
+export async function getComments(requestId: number): Promise<Comment[]> {
+  const { data } = await client.get(`/requests/${requestId}/comments`)
+  return data
+}
+
+export async function postComment(requestId: number, body: string): Promise<Comment> {
+  const { data } = await client.post(`/requests/${requestId}/comments`, { body })
+  return data
+}
+
+export async function deleteComment(requestId: number, commentId: number): Promise<void> {
+  await client.delete(`/requests/${requestId}/comments/${commentId}`)
+}

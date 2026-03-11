@@ -250,4 +250,20 @@ def init_db():
         conn.execute("ALTER TABLE requests ADD COLUMN jellyfin_item_id TEXT")
         conn.commit()
 
+    # Migration: add request_comments table
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS request_comments (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id  INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+            user_id     TEXT NOT NULL,
+            username    TEXT NOT NULL,
+            is_admin    INTEGER NOT NULL DEFAULT 0,
+            body        TEXT NOT NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_request_comments_request_id ON request_comments(request_id);
+    """)
+    conn.commit()
+
     conn.close()
