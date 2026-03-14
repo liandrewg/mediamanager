@@ -39,8 +39,11 @@ class RequestResponse(BaseModel):
     status: str
     admin_note: Optional[str]
     supporter_count: int = 1
+    supporters: list[str] = []
     is_owner: bool = False
     user_supporting: bool = False
+    days_open: int = 0
+    priority_score: float = 0
     jellyfin_item_id: Optional[str] = None
     watch_url: Optional[str] = None
     created_at: str

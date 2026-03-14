@@ -79,6 +79,7 @@ type Tab = 'requests' | 'backlog' | 'users' | 'tunnel' | 'health'
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('requests')
   const [view, setView] = useState<'board' | 'table'>('board')
+  const [sortBy, setSortBy] = useState<'priority' | 'newest' | 'oldest' | 'supporters'>('priority')
   const [noteModal, setNoteModal] = useState<{ id: number; status: string } | null>(null)
   const [noteText, setNoteText] = useState('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
@@ -100,8 +101,8 @@ export default function AdminPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['adminRequests', ''],
-    queryFn: () => getAllRequests(1, 500),
+    queryKey: ['adminRequests', sortBy],
+    queryFn: () => getAllRequests(1, 500, undefined, sortBy),
     enabled: tab === 'requests',
   })
 
@@ -229,6 +230,16 @@ export default function AdminPage() {
         <div className="flex gap-2">
           {tab === 'requests' && (
             <>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as 'priority' | 'newest' | 'oldest' | 'supporters')}
+                className="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-300 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="priority">Sort: Priority</option>
+                <option value="supporters">Sort: Most Supporters</option>
+                <option value="newest">Sort: Newest</option>
+                <option value="oldest">Sort: Oldest</option>
+              </select>
               <button
                 onClick={() => setView('board')}
                 className={`px-3 py-1.5 rounded text-sm transition-colors ${
@@ -348,7 +359,7 @@ export default function AdminPage() {
                                 {req.username} &middot; {req.media_type.toUpperCase()} &middot;{' '}
                                 {new Date(req.created_at).toLocaleDateString()}
                               </p>
-                              <p className="text-xs text-slate-500 mt-0.5">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
+                              <p className="text-xs text-slate-500 mt-0.5">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'} · {req.days_open || 0}d open · score {req.priority_score || 0}</p>
                             </div>
                           </div>
                           {req.admin_note && (
@@ -427,7 +438,7 @@ export default function AdminPage() {
                         <td className="px-4 py-3 text-white text-sm">{req.title}</td>
                         <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
                         <td className="px-4 py-3 text-slate-300 text-sm">{req.username}</td>
-                        <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}</td>
+                        <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}<div className="text-[11px] text-slate-500">{req.days_open || 0}d · score {req.priority_score || 0}</div></td>
                         <td className="px-4 py-3">
                           <RequestBadge status={req.status} />
                         </td>

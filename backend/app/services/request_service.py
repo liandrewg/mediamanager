@@ -1,6 +1,6 @@
 import sqlite3
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config import settings
 
@@ -10,10 +10,33 @@ OPEN_REQUEST_STATUSES = ("pending", "approved")
 
 def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str | None = None) -> dict:
     req = dict(row)
-    req["supporter_count"] = conn.execute(
-        "SELECT COUNT(*) FROM request_supporters WHERE request_id = ?",
+
+    supporters = conn.execute(
+        "SELECT username FROM request_supporters WHERE request_id = ? ORDER BY created_at ASC",
         (req["id"],),
-    ).fetchone()[0]
+    ).fetchall()
+    supporter_names = [r["username"] for r in supporters]
+    req["supporters"] = supporter_names
+    req["supporter_count"] = len(supporter_names)
+
+    created_raw = req.get("created_at")
+    created_dt = None
+    if isinstance(created_raw, str):
+        for parser in (datetime.fromisoformat, lambda value: datetime.strptime(value, "%Y-%m-%d %H:%M:%S")):
+            try:
+                created_dt = parser(created_raw)
+                break
+            except ValueError:
+                continue
+    if created_dt is None:
+        created_dt = datetime.now(timezone.utc)
+    if created_dt.tzinfo is None:
+        created_dt = created_dt.replace(tzinfo=timezone.utc)
+
+    days_open = max((datetime.now(timezone.utc) - created_dt).days, 0)
+    req["days_open"] = days_open
+    req["priority_score"] = round((req["supporter_count"] * 3) + min(days_open, 30), 1)
+
     req["is_owner"] = user_id == req["user_id"] if user_id else False
     req["user_supporting"] = False
     if user_id:
@@ -147,6 +170,7 @@ def get_all_requests(
     user_id: str | None = None,
     page: int = 1,
     limit: int = 20,
+    sort: str = "priority",
 ) -> dict:
     where_parts = []
     params: list = []
@@ -160,13 +184,20 @@ def get_all_requests(
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     total = conn.execute(f"SELECT COUNT(*) FROM requests r {where}", params).fetchone()[0]
     offset = (page - 1) * limit
+    sort_sql = {
+        "newest": "r.created_at DESC",
+        "oldest": "r.created_at ASC",
+        "supporters": "supporter_count DESC, r.created_at ASC",
+        "priority": "supporter_count DESC, r.created_at ASC",
+    }.get(sort, "supporter_count DESC, r.created_at ASC")
+
     rows = conn.execute(
         f"""
         SELECT r.*,
                (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) as supporter_count
         FROM requests r
         {where}
-        ORDER BY supporter_count DESC, r.created_at DESC
+        ORDER BY {sort_sql}
         LIMIT ? OFFSET ?
         """,
         params + [limit, offset],

@@ -24,8 +24,8 @@ export async function deleteRequest(id: number) {
   return data
 }
 
-export async function getAllRequests(page = 1, limit = 20, status?: string) {
-  const params: Record<string, string | number> = { page, limit }
+export async function getAllRequests(page = 1, limit = 20, status?: string, sort: string = "priority") {
+  const params: Record<string, string | number> = { page, limit, sort }
   if (status) params.status = status
   const { data } = await client.get('/admin/requests', { params })
   return data
