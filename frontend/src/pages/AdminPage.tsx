@@ -80,6 +80,7 @@ export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('requests')
   const [view, setView] = useState<'board' | 'table'>('board')
   const [sortBy, setSortBy] = useState<'priority' | 'newest' | 'oldest' | 'supporters'>('priority')
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'movie' | 'tv' | 'book'>('all')
   const [noteModal, setNoteModal] = useState<{ id: number; status: string } | null>(null)
   const [noteText, setNoteText] = useState('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
@@ -101,8 +102,8 @@ export default function AdminPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['adminRequests', sortBy],
-    queryFn: () => getAllRequests(1, 500, undefined, sortBy),
+    queryKey: ['adminRequests', sortBy, mediaTypeFilter],
+    queryFn: () => getAllRequests(1, 500, undefined, sortBy, mediaTypeFilter === 'all' ? undefined : mediaTypeFilter),
     enabled: tab === 'requests',
   })
 
@@ -239,6 +240,16 @@ export default function AdminPage() {
                 <option value="supporters">Sort: Most Supporters</option>
                 <option value="newest">Sort: Newest</option>
                 <option value="oldest">Sort: Oldest</option>
+              </select>
+              <select
+                value={mediaTypeFilter}
+                onChange={(e) => setMediaTypeFilter(e.target.value as 'all' | 'movie' | 'tv' | 'book')}
+                className="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-300 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">Type: All</option>
+                <option value="movie">Type: Movies</option>
+                <option value="tv">Type: TV</option>
+                <option value="book">Type: Books</option>
               </select>
               <button
                 onClick={() => setView('board')}

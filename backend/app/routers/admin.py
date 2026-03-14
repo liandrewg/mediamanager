@@ -20,13 +20,14 @@ router = APIRouter()
 async def get_all_requests(
     status: str | None = Query(None),
     user_id: str | None = Query(None),
+    media_type: str | None = Query(None, pattern="^(movie|tv|book)$"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=500),
     sort: str = Query("priority", pattern="^(priority|newest|oldest|supporters)$"),
     admin: dict = Depends(require_admin),
     db=Depends(get_db),
 ):
-    return request_service.get_all_requests(db, status, user_id, page, limit, sort)
+    return request_service.get_all_requests(db, status, user_id, media_type, page, limit, sort)
 
 
 @router.patch("/requests/{request_id}", response_model=RequestResponse)

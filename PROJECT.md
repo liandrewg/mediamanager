@@ -51,6 +51,7 @@ ngrok tunnel (https://mediamanager.ngrok.app)
 - **Requests Tab**
   - **Board View**: Kanban-style columns (Pending → Approved → Fulfilled / Denied)
   - **Table View**: Full list with inline status actions
+  - Sort controls (priority/newest/oldest/supporters) plus media-type filter (all/movies/tv/books)
   - Each status transition can include an optional admin note
   - Requests can be moved forwards or backwards through the pipeline
   - Stats overview: total, pending, approved, fulfilled, unique users

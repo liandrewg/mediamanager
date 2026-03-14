@@ -24,9 +24,16 @@ export async function deleteRequest(id: number) {
   return data
 }
 
-export async function getAllRequests(page = 1, limit = 20, status?: string, sort: string = "priority") {
+export async function getAllRequests(
+  page = 1,
+  limit = 20,
+  status?: string,
+  sort: string = "priority",
+  mediaType?: 'movie' | 'tv' | 'book'
+) {
   const params: Record<string, string | number> = { page, limit, sort }
   if (status) params.status = status
+  if (mediaType) params.media_type = mediaType
   const { data } = await client.get('/admin/requests', { params })
   return data
 }

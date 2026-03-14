@@ -168,6 +168,7 @@ def get_all_requests(
     conn: sqlite3.Connection,
     status: str | None = None,
     user_id: str | None = None,
+    media_type: str | None = None,
     page: int = 1,
     limit: int = 20,
     sort: str = "priority",
@@ -180,6 +181,9 @@ def get_all_requests(
     if user_id:
         where_parts.append("r.user_id = ?")
         params.append(user_id)
+    if media_type:
+        where_parts.append("r.media_type = ?")
+        params.append(media_type)
 
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     total = conn.execute(f"SELECT COUNT(*) FROM requests r {where}", params).fetchone()[0]
