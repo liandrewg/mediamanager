@@ -8,6 +8,19 @@ from app.config import settings
 OPEN_REQUEST_STATUSES = ("pending", "approved")
 
 
+def _parse_request_datetime(value: str | None) -> datetime:
+    if isinstance(value, str):
+        for parser in (datetime.fromisoformat, lambda raw: datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")):
+            try:
+                parsed = parser(value)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed
+            except ValueError:
+                continue
+    return datetime.now(timezone.utc)
+
+
 def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str | None = None) -> dict:
     req = dict(row)
 
@@ -19,20 +32,7 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
     req["supporters"] = supporter_names
     req["supporter_count"] = len(supporter_names)
 
-    created_raw = req.get("created_at")
-    created_dt = None
-    if isinstance(created_raw, str):
-        for parser in (datetime.fromisoformat, lambda value: datetime.strptime(value, "%Y-%m-%d %H:%M:%S")):
-            try:
-                created_dt = parser(created_raw)
-                break
-            except ValueError:
-                continue
-    if created_dt is None:
-        created_dt = datetime.now(timezone.utc)
-    if created_dt.tzinfo is None:
-        created_dt = created_dt.replace(tzinfo=timezone.utc)
-
+    created_dt = _parse_request_datetime(req.get("created_at"))
     days_open = max((datetime.now(timezone.utc) - created_dt).days, 0)
     req["days_open"] = days_open
     req["priority_score"] = round((req["supporter_count"] * 3) + min(days_open, 30), 1)
@@ -301,6 +301,13 @@ def get_request_stats(conn: sqlite3.Connection) -> dict:
     unique_users = conn.execute(
         "SELECT COUNT(DISTINCT user_id) FROM request_supporters"
     ).fetchone()[0]
+
+    now = datetime.now(timezone.utc)
+    open_rows = conn.execute(
+        "SELECT created_at FROM requests WHERE status IN ('pending', 'approved')"
+    ).fetchall()
+    open_ages = [max((now - _parse_request_datetime(r["created_at"])).days, 0) for r in open_rows]
+
     return {
         "total": total,
         "pending": stats.get("pending", 0),
@@ -308,6 +315,10 @@ def get_request_stats(conn: sqlite3.Connection) -> dict:
         "denied": stats.get("denied", 0),
         "fulfilled": stats.get("fulfilled", 0),
         "unique_users": unique_users,
+        "open_over_3_days": sum(1 for age in open_ages if age >= 3),
+        "open_over_7_days": sum(1 for age in open_ages if age >= 7),
+        "open_over_14_days": sum(1 for age in open_ages if age >= 14),
+        "oldest_open_days": max(open_ages) if open_ages else 0,
     }
 
 

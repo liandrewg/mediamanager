@@ -1,5 +1,7 @@
 import sqlite3
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from app.services import request_service
 
@@ -89,6 +91,83 @@ class GetAllRequestsFilteringTests(unittest.TestCase):
 
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["items"][0]["title"], "Interstellar")
+
+
+class RequestStatsAgingTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+            """
+        )
+
+        rows = [
+            ("u1", "alice", 111, "movie", "Old Pending", "pending", "2026-03-01T00:00:00+00:00"),
+            ("u2", "bob", 222, "tv", "Week Old Approved", "approved", "2026-03-08T00:00:00+00:00"),
+            ("u3", "cara", 333, "book", "Fresh Pending", "pending", "2026-03-14T12:00:00+00:00"),
+            ("u4", "dave", 444, "movie", "Already Fulfilled", "fulfilled", "2026-02-20T00:00:00+00:00"),
+        ]
+
+        for user_id, username, tmdb_id, media_type, title, status, created_at in rows:
+            cur = self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, username, tmdb_id, media_type, title, status, created_at, created_at),
+            )
+            req_id = cur.lastrowid
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+                (req_id, user_id, username, created_at),
+            )
+
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_includes_open_request_aging_metrics(self):
+        frozen_now = datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc)
+
+        with patch.object(request_service, "datetime") as mock_datetime:
+            mock_datetime.now.return_value = frozen_now
+            mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+            mock_datetime.strptime.side_effect = datetime.strptime
+
+            stats = request_service.get_request_stats(self.conn)
+
+        self.assertEqual(stats["total"], 4)
+        self.assertEqual(stats["pending"], 2)
+        self.assertEqual(stats["approved"], 1)
+        self.assertEqual(stats["fulfilled"], 1)
+        self.assertEqual(stats["open_over_3_days"], 2)
+        self.assertEqual(stats["open_over_7_days"], 2)
+        self.assertEqual(stats["open_over_14_days"], 1)
+        self.assertEqual(stats["oldest_open_days"], 15)
 
 
 if __name__ == "__main__":

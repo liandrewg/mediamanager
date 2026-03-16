@@ -43,7 +43,20 @@ export async function updateRequest(id: number, status: string, admin_note?: str
   return data
 }
 
-export async function getAdminStats() {
+export interface AdminStats {
+  total: number
+  pending: number
+  approved: number
+  denied: number
+  fulfilled: number
+  unique_users: number
+  open_over_3_days: number
+  open_over_7_days: number
+  open_over_14_days: number
+  oldest_open_days: number
+}
+
+export async function getAdminStats(): Promise<AdminStats> {
   const { data } = await client.get('/admin/stats')
   return data
 }

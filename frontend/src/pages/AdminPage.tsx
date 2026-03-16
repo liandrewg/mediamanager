@@ -81,6 +81,7 @@ export default function AdminPage() {
   const [view, setView] = useState<'board' | 'table'>('board')
   const [sortBy, setSortBy] = useState<'priority' | 'newest' | 'oldest' | 'supporters'>('priority')
   const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'movie' | 'tv' | 'book'>('all')
+  const [ageFilter, setAgeFilter] = useState<'all' | '3' | '7' | '14'>('all')
   const [noteModal, setNoteModal] = useState<{ id: number; status: string } | null>(null)
   const [noteText, setNoteText] = useState('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
@@ -206,6 +207,20 @@ export default function AdminPage() {
   })
 
   const allRequests: any[] = data?.items || []
+  const minAge = ageFilter === 'all' ? 0 : Number(ageFilter)
+  const displayedRequests =
+    minAge === 0
+      ? allRequests
+      : allRequests.filter((req) =>
+          ['pending', 'approved'].includes(req.status) ? (req.days_open || 0) >= minAge : true
+        )
+
+  const getAgeBadgeClass = (daysOpen: number) => {
+    if (daysOpen >= 14) return 'bg-red-600/20 text-red-300 border border-red-500/30'
+    if (daysOpen >= 7) return 'bg-amber-600/20 text-amber-300 border border-amber-500/30'
+    if (daysOpen >= 3) return 'bg-yellow-600/20 text-yellow-300 border border-yellow-500/30'
+    return 'bg-slate-700 text-slate-300 border border-slate-600'
+  }
 
   const handleMove = (id: number, status: string) => {
     setNoteModal({ id, status })
@@ -250,6 +265,16 @@ export default function AdminPage() {
                 <option value="movie">Type: Movies</option>
                 <option value="tv">Type: TV</option>
                 <option value="book">Type: Books</option>
+              </select>
+              <select
+                value={ageFilter}
+                onChange={(e) => setAgeFilter(e.target.value as 'all' | '3' | '7' | '14')}
+                className="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-300 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">Age: All</option>
+                <option value="3">Age: 3+ days</option>
+                <option value="7">Age: 7+ days</option>
+                <option value="14">Age: 14+ days</option>
               </select>
               <button
                 onClick={() => setView('board')}
@@ -330,22 +355,32 @@ export default function AdminPage() {
       {tab === 'requests' && (
         <>
           {stats && (
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
               <StatsCard label="Total Requests" value={stats.total} />
               <StatsCard label="Pending" value={stats.pending} />
               <StatsCard label="Approved" value={stats.approved} />
               <StatsCard label="Fulfilled" value={stats.fulfilled} />
               <StatsCard label="Unique Users" value={stats.unique_users} />
+              <StatsCard label="Open 3+ days" value={stats.open_over_3_days || 0} />
+              <StatsCard label="Open 7+ days" value={stats.open_over_7_days || 0} />
+              <StatsCard label="Open 14+ days" value={stats.open_over_14_days || 0} />
+              <StatsCard label="Oldest Open (days)" value={stats.oldest_open_days || 0} />
             </div>
           )}
 
           {isLoading && <p className="text-slate-400">Loading...</p>}
 
+          {!isLoading && (stats?.open_over_7_days || 0) > 0 && (
+            <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              ⚠ Queue aging alert: {stats?.open_over_7_days || 0} open request{(stats?.open_over_7_days || 0) === 1 ? '' : 's'} over 7 days old.
+            </div>
+          )}
+
           {/* Board View */}
           {!isLoading && view === 'board' && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               {COLUMNS.map((col) => {
-                const items = allRequests.filter((r) => r.status === col.key)
+                const items = displayedRequests.filter((r) => r.status === col.key)
                 const transitions = TRANSITIONS[col.key] || []
                 return (
                   <div key={col.key} className={`rounded-lg border-t-2 ${col.color} ${col.bg}`}>
@@ -370,7 +405,12 @@ export default function AdminPage() {
                                 {req.username} &middot; {req.media_type.toUpperCase()} &middot;{' '}
                                 {new Date(req.created_at).toLocaleDateString()}
                               </p>
-                              <p className="text-xs text-slate-500 mt-0.5">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'} · {req.days_open || 0}d open · score {req.priority_score || 0}</p>
+                              <p className="text-xs text-slate-500 mt-0.5">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'} · score {req.priority_score || 0}</p>
+                              {['pending', 'approved'].includes(req.status) && (
+                                <span className={`mt-1 inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${getAgeBadgeClass(req.days_open || 0)}`}>
+                                  {req.days_open || 0}d open
+                                </span>
+                              )}
                             </div>
                           </div>
                           {req.admin_note && (
@@ -434,6 +474,7 @@ export default function AdminPage() {
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Type</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">User</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Supporters</th>
+                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Age</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
                     <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Note</th>
@@ -442,14 +483,23 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {allRequests.map((req: any) => {
+                  {displayedRequests.map((req: any) => {
                     const transitions = TRANSITIONS[req.status] || []
                     return (
                       <tr key={req.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                         <td className="px-4 py-3 text-white text-sm">{req.title}</td>
                         <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
                         <td className="px-4 py-3 text-slate-300 text-sm">{req.username}</td>
-                        <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}<div className="text-[11px] text-slate-500">{req.days_open || 0}d · score {req.priority_score || 0}</div></td>
+                        <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}<div className="text-[11px] text-slate-500">score {req.priority_score || 0}</div></td>
+                        <td className="px-4 py-3 text-sm">
+                          {['pending', 'approved'].includes(req.status) ? (
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${getAgeBadgeClass(req.days_open || 0)}`}>
+                              {req.days_open || 0}d open
+                            </span>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           <RequestBadge status={req.status} />
                         </td>
