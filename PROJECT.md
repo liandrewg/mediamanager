@@ -54,6 +54,7 @@ ngrok tunnel (https://mediamanager.ngrok.app)
   - Sort controls (priority/newest/oldest/supporters) plus media-type filter (all/movies/tv/books)
   - Each status transition can include an optional admin note
   - Requests can be moved forwards or backwards through the pipeline
+  - Bulk status updates endpoint for processing many requests at once
   - Stats overview: total, pending, approved, fulfilled, unique users
 - **Backlog Tab**
   - Kanban board for bugs and feature requests

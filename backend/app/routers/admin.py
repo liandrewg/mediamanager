@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import httpx
 
@@ -73,6 +73,31 @@ async def update_request(
 
 class JellyfinLinkUpdate(BaseModel):
     jellyfin_item_id: str | None = None
+
+
+class BulkRequestStatusUpdate(BaseModel):
+    request_ids: list[int] = Field(..., min_length=1)
+    status: str
+    admin_note: str | None = None
+
+
+@router.post("/requests/bulk-status")
+async def bulk_update_request_statuses(
+    body: BulkRequestStatusUpdate,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    if body.status not in ("approved", "denied", "fulfilled", "pending"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    result = request_service.bulk_update_request_status(
+        db,
+        request_ids=body.request_ids,
+        new_status=body.status,
+        changed_by=admin["user_id"],
+        admin_note=body.admin_note,
+    )
+    return result
 
 
 @router.patch("/requests/{request_id}/jellyfin-link", response_model=RequestResponse)

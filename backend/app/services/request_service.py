@@ -250,6 +250,43 @@ def update_request_status(
     return get_request_by_id(conn, request_id)
 
 
+def bulk_update_request_status(
+    conn: sqlite3.Connection,
+    request_ids: list[int],
+    new_status: str,
+    changed_by: str,
+    admin_note: str | None = None,
+) -> dict:
+    """Bulk update request statuses and write request_history entries for each change."""
+    if not request_ids:
+        return {"updated": [], "missing": []}
+
+    updated: list[dict] = []
+    missing: list[int] = []
+    now = datetime.utcnow().isoformat()
+
+    for request_id in request_ids:
+        row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+        if not row:
+            missing.append(request_id)
+            continue
+
+        old_status = row["status"]
+        conn.execute(
+            "UPDATE requests SET status = ?, admin_note = ?, updated_at = ? WHERE id = ?",
+            (new_status, admin_note, now, request_id),
+        )
+        conn.execute(
+            """INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+               VALUES (?, ?, ?, ?, ?)""",
+            (request_id, old_status, new_status, changed_by, admin_note),
+        )
+        updated.append(get_request_by_id(conn, request_id))
+
+    conn.commit()
+    return {"updated": updated, "missing": missing}
+
+
 def delete_request(conn: sqlite3.Connection, request_id: int, user_id: str) -> bool:
     row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
     if not row:

@@ -93,6 +93,109 @@ class GetAllRequestsFilteringTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["title"], "Interstellar")
 
 
+class BulkStatusUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+            """
+        )
+
+        rows = [
+            ("u1", "alice", 101, "movie", "Interstellar", "pending", "2026-03-10T10:00:00+00:00"),
+            ("u2", "bob", 202, "tv", "Severance", "approved", "2026-03-11T10:00:00+00:00"),
+        ]
+        for user_id, username, tmdb_id, media_type, title, status, created_at in rows:
+            cur = self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, username, tmdb_id, media_type, title, status, created_at, created_at),
+            )
+            req_id = cur.lastrowid
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+                (req_id, user_id, username, created_at),
+            )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_bulk_update_changes_multiple_requests_and_tracks_history(self):
+        result = request_service.bulk_update_request_status(
+            self.conn,
+            request_ids=[1, 2],
+            new_status="denied",
+            changed_by="admin-1",
+            admin_note="Not available yet",
+        )
+
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(len(result["updated"]), 2)
+        self.assertTrue(all(item["status"] == "denied" for item in result["updated"]))
+
+        history_rows = self.conn.execute(
+            "SELECT request_id, old_status, new_status, changed_by, note FROM request_history ORDER BY request_id"
+        ).fetchall()
+        self.assertEqual(len(history_rows), 2)
+        self.assertEqual(history_rows[0]["request_id"], 1)
+        self.assertEqual(history_rows[0]["old_status"], "pending")
+        self.assertEqual(history_rows[0]["new_status"], "denied")
+        self.assertEqual(history_rows[0]["changed_by"], "admin-1")
+        self.assertEqual(history_rows[0]["note"], "Not available yet")
+        self.assertEqual(history_rows[1]["request_id"], 2)
+        self.assertEqual(history_rows[1]["old_status"], "approved")
+
+    def test_bulk_update_reports_missing_ids(self):
+        result = request_service.bulk_update_request_status(
+            self.conn,
+            request_ids=[2, 999],
+            new_status="fulfilled",
+            changed_by="admin-2",
+        )
+
+        self.assertEqual(result["missing"], [999])
+        self.assertEqual(len(result["updated"]), 1)
+        self.assertEqual(result["updated"][0]["id"], 2)
+        self.assertEqual(result["updated"][0]["status"], "fulfilled")
+
+
 class RequestStatsAgingTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
