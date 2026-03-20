@@ -43,6 +43,20 @@ export async function updateRequest(id: number, status: string, admin_note?: str
   return data
 }
 
+export interface BulkStatusResult {
+  updated: any[]
+  missing: number[]
+}
+
+export async function bulkUpdateRequests(requestIds: number[], status: string, admin_note?: string): Promise<BulkStatusResult> {
+  const { data } = await client.post('/admin/requests/bulk-status', {
+    request_ids: requestIds,
+    status,
+    admin_note,
+  })
+  return data
+}
+
 export interface AdminStats {
   total: number
   pending: number

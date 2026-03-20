@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getAllRequests, updateRequest, getAdminStats, getUsers, updateUserRole, getHealthCheck, triggerJellyfinScan } from '../api/requests'
+import { getAllRequests, updateRequest, bulkUpdateRequests, getAdminStats, getUsers, updateUserRole, getHealthCheck, triggerJellyfinScan } from '../api/requests'
 import { getAllBacklog, updateBacklogItem, deleteBacklogItem, getBacklogStats } from '../api/backlog'
 import { getTunnelStatus, startTunnel, stopTunnel } from '../api/tunnel'
 import { useAuth } from '../context/AuthContext'
@@ -85,6 +85,7 @@ export default function AdminPage() {
   const [noteModal, setNoteModal] = useState<{ id: number; status: string } | null>(null)
   const [noteText, setNoteText] = useState('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
+  const [selectedRequestIds, setSelectedRequestIds] = useState<Set<number>>(new Set())
 
   const toggleComments = (id: number) => {
     setExpandedComments((prev) => {
@@ -170,6 +171,16 @@ export default function AdminPage() {
     },
   })
 
+  const bulkUpdateMutation = useMutation({
+    mutationFn: ({ requestIds, status }: { requestIds: number[]; status: string }) =>
+      bulkUpdateRequests(requestIds, status, `Bulk update from admin table (${requestIds.length} requests)`),
+    onSuccess: () => {
+      setSelectedRequestIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['adminRequests'] })
+      queryClient.invalidateQueries({ queryKey: ['adminStats'] })
+    },
+  })
+
   const roleMutation = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
       updateUserRole(userId, role),
@@ -237,6 +248,31 @@ export default function AdminPage() {
 
   const quickMove = (id: number, status: string) => {
     updateMutation.mutate({ id, status })
+  }
+
+  const toggleRequestSelection = (requestId: number) => {
+    setSelectedRequestIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(requestId)) next.delete(requestId)
+      else next.add(requestId)
+      return next
+    })
+  }
+
+  const toggleSelectAllDisplayed = () => {
+    const visibleIds = displayedRequests.map((req: any) => req.id)
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id: number) => selectedRequestIds.has(id))
+    setSelectedRequestIds((prev) => {
+      const next = new Set(prev)
+      if (allSelected) visibleIds.forEach((id: number) => next.delete(id))
+      else visibleIds.forEach((id: number) => next.add(id))
+      return next
+    })
+  }
+
+  const bulkMove = (status: string) => {
+    if (selectedRequestIds.size === 0) return
+    bulkUpdateMutation.mutate({ requestIds: Array.from(selectedRequestIds), status })
   }
 
   return (
@@ -466,86 +502,85 @@ export default function AdminPage() {
 
           {/* Table View */}
           {!isLoading && view === 'table' && (
-            <div className="bg-slate-800 rounded-lg overflow-hidden overflow-x-auto">
-              <table className="w-full min-w-[700px]">
-                <thead>
-                  <tr className="border-b border-slate-700">
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Title</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Type</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">User</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Supporters</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Age</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Note</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Watch</th>
-                    <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Move to</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayedRequests.map((req: any) => {
-                    const transitions = TRANSITIONS[req.status] || []
-                    return (
-                      <tr key={req.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                        <td className="px-4 py-3 text-white text-sm">{req.title}</td>
-                        <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
-                        <td className="px-4 py-3 text-slate-300 text-sm">{req.username}</td>
-                        <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}<div className="text-[11px] text-slate-500">score {req.priority_score || 0}</div></td>
-                        <td className="px-4 py-3 text-sm">
-                          {['pending', 'approved'].includes(req.status) ? (
-                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${getAgeBadgeClass(req.days_open || 0)}`}>
-                              {req.days_open || 0}d open
-                            </span>
-                          ) : (
-                            <span className="text-slate-600">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <RequestBadge status={req.status} />
-                        </td>
-                        <td className="px-4 py-3 text-slate-400 text-sm">
-                          {new Date(req.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-4 py-3 text-slate-400 text-sm max-w-48 truncate">
-                          {req.admin_note || '-'}
-                        </td>
-                        <td className="px-4 py-3">
-                          {req.watch_url ? (
-                            <a
-                              href={req.watch_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 px-2 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors"
-                            >
-                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" /></svg>
-                              Watch
-                            </a>
-                          ) : req.status === 'fulfilled' ? (
-                            <span className="text-xs text-amber-500/60">No link</span>
-                          ) : (
-                            <span className="text-slate-600">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1.5">
-                            {transitions.map((t) => (
-                              <button
-                                key={t.status}
-                                onClick={() => quickMove(req.id, t.status)}
-                                disabled={updateMutation.isPending}
-                                className={`px-2 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 ${t.style}`}
-                              >
-                                {t.label}
-                              </button>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2">
+                <span className="text-xs text-slate-400">{selectedRequestIds.size} selected</span>
+                <button onClick={toggleSelectAllDisplayed} className="text-xs text-blue-400 hover:text-blue-300">Toggle all visible</button>
+                <div className="h-4 w-px bg-slate-700" />
+                <button onClick={() => bulkMove('approved')} disabled={selectedRequestIds.size === 0 || bulkUpdateMutation.isPending} className="px-2 py-1 rounded text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40">Approve</button>
+                <button onClick={() => bulkMove('fulfilled')} disabled={selectedRequestIds.size === 0 || bulkUpdateMutation.isPending} className="px-2 py-1 rounded text-xs font-medium bg-green-600 hover:bg-green-700 text-white disabled:opacity-40">Fulfill</button>
+                <button onClick={() => bulkMove('denied')} disabled={selectedRequestIds.size === 0 || bulkUpdateMutation.isPending} className="px-2 py-1 rounded text-xs font-medium bg-red-600 hover:bg-red-700 text-white disabled:opacity-40">Deny</button>
+                <button onClick={() => bulkMove('pending')} disabled={selectedRequestIds.size === 0 || bulkUpdateMutation.isPending} className="px-2 py-1 rounded text-xs font-medium bg-yellow-600 hover:bg-yellow-700 text-white disabled:opacity-40">Move to Pending</button>
+              </div>
+              <div className="bg-slate-800 rounded-lg overflow-hidden overflow-x-auto">
+                <table className="w-full min-w-[700px]">
+                  <thead>
+                    <tr className="border-b border-slate-700">
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">
+                        <input type="checkbox" checked={displayedRequests.length > 0 && displayedRequests.every((req: any) => selectedRequestIds.has(req.id))} onChange={toggleSelectAllDisplayed} className="rounded border-slate-500 bg-slate-900 text-blue-500 focus:ring-blue-500" />
+                      </th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Title</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Type</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">User</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Supporters</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Age</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Note</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Watch</th>
+                      <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Move to</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedRequests.map((req: any) => {
+                      const transitions = TRANSITIONS[req.status] || []
+                      return (
+                        <tr key={req.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                          <td className="px-4 py-3"><input type="checkbox" checked={selectedRequestIds.has(req.id)} onChange={() => toggleRequestSelection(req.id)} className="rounded border-slate-500 bg-slate-900 text-blue-500 focus:ring-blue-500" /></td>
+                          <td className="px-4 py-3 text-white text-sm">{req.title}</td>
+                          <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
+                          <td className="px-4 py-3 text-slate-300 text-sm">{req.username}</td>
+                          <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}<div className="text-[11px] text-slate-500">score {req.priority_score || 0}</div></td>
+                          <td className="px-4 py-3 text-sm">
+                            {['pending', 'approved'].includes(req.status) ? (
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${getAgeBadgeClass(req.days_open || 0)}`}>
+                                {req.days_open || 0}d open
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3"><RequestBadge status={req.status} /></td>
+                          <td className="px-4 py-3 text-slate-400 text-sm">{new Date(req.created_at).toLocaleDateString()}</td>
+                          <td className="px-4 py-3 text-slate-400 text-sm max-w-48 truncate">{req.admin_note || '-'}</td>
+                          <td className="px-4 py-3">
+                            {req.watch_url ? (
+                              <a href={req.watch_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 px-2 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors">
+                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" /></svg>
+                                Watch
+                              </a>
+                            ) : req.status === 'fulfilled' ? (
+                              <span className="text-xs text-amber-500/60">No link</span>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1.5">
+                              {transitions.map((t) => (
+                                <button key={t.status} onClick={() => quickMove(req.id, t.status)} disabled={updateMutation.isPending} className={`px-2 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 ${t.style}`}>
+                                  {t.label}
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </>
       )}
