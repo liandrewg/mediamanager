@@ -6,6 +6,9 @@ from app.config import settings
 
 
 OPEN_REQUEST_STATUSES = ("pending", "approved")
+ESCALATION_MIN_SUPPORTERS = 3
+ESCALATION_MIN_AGE_DAYS = 10
+ESCALATION_MARKER = "[AUTO-ESCALATED]"
 
 
 def _parse_request_datetime(value: str | None) -> datetime:
@@ -329,6 +332,57 @@ def delete_request(conn: sqlite3.Connection, request_id: int, user_id: str) -> b
     return True
 
 
+def run_high_demand_escalation(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+    min_supporters: int = ESCALATION_MIN_SUPPORTERS,
+    min_age_days: int = ESCALATION_MIN_AGE_DAYS,
+) -> dict:
+    """Escalate old, high-demand open requests by tagging them for admin attention."""
+    now = now or datetime.now(timezone.utc)
+    escalated = 0
+
+    rows = conn.execute(
+        """
+        SELECT r.*, (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) as supporter_count
+        FROM requests r
+        WHERE r.status IN ('pending', 'approved')
+        """
+    ).fetchall()
+
+    for row in rows:
+        req = dict(row)
+        created_dt = _parse_request_datetime(req.get("created_at"))
+        age_days = max((now - created_dt).days, 0)
+
+        if req["supporter_count"] < min_supporters or age_days < min_age_days:
+            continue
+
+        existing_note = req.get("admin_note") or ""
+        if ESCALATION_MARKER in existing_note:
+            continue
+
+        escalation_note = (
+            f"{ESCALATION_MARKER} High-demand request has been open {age_days} days "
+            f"with {req['supporter_count']} supporters."
+        )
+        merged_note = f"{existing_note}\n\n{escalation_note}".strip() if existing_note else escalation_note
+
+        conn.execute(
+            "UPDATE requests SET admin_note = ?, updated_at = ? WHERE id = ?",
+            (merged_note, now.isoformat(), req["id"]),
+        )
+        conn.execute(
+            """INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+               VALUES (?, ?, ?, 'system', ?)""",
+            (req["id"], req["status"], req["status"], escalation_note),
+        )
+        escalated += 1
+
+    conn.commit()
+    return {"escalated": escalated}
+
+
 def get_request_stats(conn: sqlite3.Connection) -> dict:
     rows = conn.execute(
         "SELECT status, COUNT(*) as count FROM requests GROUP BY status"
@@ -345,6 +399,16 @@ def get_request_stats(conn: sqlite3.Connection) -> dict:
     ).fetchall()
     open_ages = [max((now - _parse_request_datetime(r["created_at"])).days, 0) for r in open_rows]
 
+    escalated_open = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM requests
+        WHERE status IN ('pending', 'approved')
+          AND admin_note LIKE ?
+        """,
+        (f"%{ESCALATION_MARKER}%",),
+    ).fetchone()[0]
+
     return {
         "total": total,
         "pending": stats.get("pending", 0),
@@ -356,6 +420,7 @@ def get_request_stats(conn: sqlite3.Connection) -> dict:
         "open_over_7_days": sum(1 for age in open_ages if age >= 7),
         "open_over_14_days": sum(1 for age in open_ages if age >= 14),
         "oldest_open_days": max(open_ages) if open_ages else 0,
+        "escalated_open": escalated_open,
     }
 
 

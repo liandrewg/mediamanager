@@ -9,11 +9,16 @@ from app.config import settings
 from app.database import init_db, get_db_connection
 from app.routers import auth, tmdb, requests, jellyfin, admin, backlog, tunnel, books, comments
 from app.services.jellyfin_client import jellyfin_client
-from app.services.request_service import get_open_requests, auto_fulfill_request
+from app.services.request_service import (
+    get_open_requests,
+    auto_fulfill_request,
+    run_high_demand_escalation,
+)
 
 logger = logging.getLogger(__name__)
 
 LIBRARY_CHECK_INTERVAL = 300  # 5 minutes
+REQUEST_ESCALATION_INTERVAL = 86400  # daily
 
 
 async def check_library_for_fulfilled_requests():
@@ -86,12 +91,29 @@ async def check_library_for_fulfilled_requests():
             logger.exception("Error in library check background task")
 
 
+async def run_daily_request_lifecycle():
+    """Daily lifecycle automation for high-demand stale requests."""
+    while True:
+        try:
+            conn = get_db_connection()
+            result = run_high_demand_escalation(conn)
+            if result.get("escalated"):
+                logger.info("Escalated %d high-demand stale requests", result["escalated"])
+            conn.close()
+        except Exception:
+            logger.exception("Error in request lifecycle automation task")
+
+        await asyncio.sleep(REQUEST_ESCALATION_INTERVAL)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    task = asyncio.create_task(check_library_for_fulfilled_requests())
+    library_task = asyncio.create_task(check_library_for_fulfilled_requests())
+    lifecycle_task = asyncio.create_task(run_daily_request_lifecycle())
     yield
-    task.cancel()
+    library_task.cancel()
+    lifecycle_task.cancel()
 
 
 app = FastAPI(title="Media Manager", version="1.0.0", lifespan=lifespan)

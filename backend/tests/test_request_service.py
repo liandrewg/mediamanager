@@ -271,6 +271,105 @@ class RequestStatsAgingTests(unittest.TestCase):
         self.assertEqual(stats["open_over_7_days"], 2)
         self.assertEqual(stats["open_over_14_days"], 1)
         self.assertEqual(stats["oldest_open_days"], 15)
+        self.assertEqual(stats["escalated_open"], 0)
+
+
+class HighDemandEscalationTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+            """
+        )
+
+        # stale + high demand -> should escalate
+        self.conn.execute(
+            """
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES ('u1', 'alice', 101, 'movie', 'The Big Ask', 'pending', '2026-03-01T00:00:00+00:00', '2026-03-01T00:00:00+00:00')
+            """
+        )
+        for idx in range(1, 4):
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, ?, ?, '2026-03-01T00:00:00+00:00')",
+                (f"s{idx}", f"supporter{idx}"),
+            )
+
+        # not stale enough -> should not escalate
+        self.conn.execute(
+            """
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES ('u2', 'bob', 202, 'tv', 'Fresh Demand', 'pending', '2026-03-15T00:00:00+00:00', '2026-03-15T00:00:00+00:00')
+            """
+        )
+        for idx in range(1, 5):
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (2, ?, ?, '2026-03-15T00:00:00+00:00')",
+                (f"f{idx}", f"fan{idx}"),
+            )
+
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_escalates_stale_high_demand_requests_once(self):
+        frozen_now = datetime(2026, 3, 21, 0, 0, tzinfo=timezone.utc)
+
+        first = request_service.run_high_demand_escalation(self.conn, now=frozen_now)
+        second = request_service.run_high_demand_escalation(self.conn, now=frozen_now)
+
+        self.assertEqual(first["escalated"], 1)
+        self.assertEqual(second["escalated"], 0)
+
+        row = self.conn.execute("SELECT admin_note FROM requests WHERE id = 1").fetchone()
+        self.assertIn("[AUTO-ESCALATED]", row["admin_note"])
+
+        untouched = self.conn.execute("SELECT admin_note FROM requests WHERE id = 2").fetchone()
+        self.assertIsNone(untouched["admin_note"])
+
+        history_rows = self.conn.execute(
+            "SELECT request_id, old_status, new_status, changed_by, note FROM request_history ORDER BY id"
+        ).fetchall()
+        self.assertEqual(len(history_rows), 1)
+        self.assertEqual(history_rows[0]["request_id"], 1)
+        self.assertEqual(history_rows[0]["old_status"], "pending")
+        self.assertEqual(history_rows[0]["new_status"], "pending")
+        self.assertEqual(history_rows[0]["changed_by"], "system")
+        self.assertIn("[AUTO-ESCALATED]", history_rows[0]["note"])
 
 
 if __name__ == "__main__":
