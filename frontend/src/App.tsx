@@ -9,6 +9,7 @@ import MediaDetailPage from './pages/MediaDetailPage'
 import LibraryPage from './pages/LibraryPage'
 import MyRequestsPage from './pages/MyRequestsPage'
 import AdminPage from './pages/AdminPage'
+import AnalyticsPage from './pages/AnalyticsPage'
 import ReportPage from './pages/ReportPage'
 import BookDetailPage from './pages/BookDetailPage'
 
@@ -28,6 +29,7 @@ function App() {
           <Route path="/report" element={<ReportPage />} />
           <Route element={<AdminRoute />}>
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
           </Route>
         </Route>
       </Route>

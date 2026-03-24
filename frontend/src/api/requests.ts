@@ -95,6 +95,11 @@ export async function triggerJellyfinScan() {
   return data
 }
 
+export async function getAnalytics() {
+  const { data } = await client.get('/admin/analytics')
+  return data
+}
+
 
 export async function updateJellyfinLink(id: number, jellyfin_item_id: string | null) {
   const { data } = await client.patch(`/admin/requests/${id}/jellyfin-link`, { jellyfin_item_id })

@@ -1,0 +1,3 @@
+login-page-smoke	npx playwright test tests/smoke/login-page.spec.ts
+protected-route-smoke	npx playwright test tests/smoke/protected-route.spec.ts
+mock-login-navigation-smoke	npx playwright test tests/smoke/mock-login-navigation.spec.ts

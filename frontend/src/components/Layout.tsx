@@ -46,6 +46,11 @@ export default function Layout() {
             Admin
           </NavLink>
         )}
+        {user?.is_admin && (
+          <NavLink to="/analytics" className={linkClass} onClick={closeMenu}>
+            Analytics
+          </NavLink>
+        )}
       </nav>
       <div className="p-4 border-t border-slate-700">
         <p className="text-sm text-slate-400 mb-2">{user?.username}</p>

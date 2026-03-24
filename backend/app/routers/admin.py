@@ -237,6 +237,15 @@ async def health_check(admin: dict = Depends(require_admin)):
     return checks
 
 
+@router.get("/analytics")
+async def get_analytics(
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    from app.services.analytics_service import get_analytics as _get_analytics
+    return _get_analytics(db)
+
+
 @router.post("/jellyfin/scan")
 async def trigger_jellyfin_scan(admin: dict = Depends(require_admin)):
     try:
