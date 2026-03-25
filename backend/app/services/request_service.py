@@ -10,6 +10,11 @@ ESCALATION_MIN_SUPPORTERS = 3
 ESCALATION_MIN_AGE_DAYS = 10
 ESCALATION_MARKER = "[AUTO-ESCALATED]"
 
+PENDING_REMINDER_MIN_AGE_DAYS = 3
+PENDING_REMINDER_MARKER = "[AUTO-PENDING-REMINDER]"
+DENIED_AUTO_CLOSE_MIN_AGE_DAYS = 14
+DENIED_AUTO_CLOSE_MARKER = "[AUTO-CLOSED-DENIED]"
+
 
 def _parse_request_datetime(value: str | None) -> datetime:
     if isinstance(value, str):
@@ -175,6 +180,7 @@ def get_all_requests(
     page: int = 1,
     limit: int = 20,
     sort: str = "priority",
+    include_auto_closed_denied: bool = False,
 ) -> dict:
     where_parts = []
     params: list = []
@@ -187,6 +193,9 @@ def get_all_requests(
     if media_type:
         where_parts.append("r.media_type = ?")
         params.append(media_type)
+    if not include_auto_closed_denied:
+        where_parts.append("NOT (r.status = 'denied' AND r.admin_note LIKE ?)")
+        params.append(f"%{DENIED_AUTO_CLOSE_MARKER}%")
 
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     total = conn.execute(f"SELECT COUNT(*) FROM requests r {where}", params).fetchone()[0]
@@ -383,6 +392,115 @@ def run_high_demand_escalation(
     return {"escalated": escalated}
 
 
+def run_pending_approval_reminders(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+    min_age_days: int = PENDING_REMINDER_MIN_AGE_DAYS,
+) -> dict:
+    """Add an admin-visible note/history reminder for stale pending requests."""
+    now = now or datetime.now(timezone.utc)
+    reminded = 0
+
+    rows = conn.execute(
+        """
+        SELECT r.*
+        FROM requests r
+        WHERE r.status = 'pending'
+        """
+    ).fetchall()
+
+    for row in rows:
+        req = dict(row)
+        created_dt = _parse_request_datetime(req.get("created_at"))
+        age_days = max((now - created_dt).days, 0)
+        if age_days < min_age_days:
+            continue
+
+        existing_note = req.get("admin_note") or ""
+        if PENDING_REMINDER_MARKER in existing_note:
+            continue
+
+        reminder_note = f"{PENDING_REMINDER_MARKER} Pending approval for {age_days} days."
+        merged_note = f"{existing_note}\n\n{reminder_note}".strip() if existing_note else reminder_note
+
+        conn.execute(
+            "UPDATE requests SET admin_note = ?, updated_at = ? WHERE id = ?",
+            (merged_note, now.isoformat(), req["id"]),
+        )
+        conn.execute(
+            """INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+               VALUES (?, ?, ?, 'system', ?)""",
+            (req["id"], req["status"], req["status"], reminder_note),
+        )
+        reminded += 1
+
+    conn.commit()
+    return {"reminded": reminded}
+
+
+def run_stale_denied_auto_close(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+    min_age_days: int = DENIED_AUTO_CLOSE_MIN_AGE_DAYS,
+) -> dict:
+    """Mark stale denied requests as auto-closed for cleaner admin queue handling."""
+    now = now or datetime.now(timezone.utc)
+    auto_closed = 0
+
+    rows = conn.execute(
+        """
+        SELECT r.*
+        FROM requests r
+        WHERE r.status = 'denied'
+        """
+    ).fetchall()
+
+    for row in rows:
+        req = dict(row)
+        updated_dt = _parse_request_datetime(req.get("updated_at") or req.get("created_at"))
+        age_days = max((now - updated_dt).days, 0)
+        if age_days < min_age_days:
+            continue
+
+        existing_note = req.get("admin_note") or ""
+        if DENIED_AUTO_CLOSE_MARKER in existing_note:
+            continue
+
+        close_note = f"{DENIED_AUTO_CLOSE_MARKER} Denied request closed after {age_days} days without changes."
+        merged_note = f"{existing_note}\n\n{close_note}".strip() if existing_note else close_note
+
+        conn.execute(
+            "UPDATE requests SET admin_note = ?, updated_at = ? WHERE id = ?",
+            (merged_note, now.isoformat(), req["id"]),
+        )
+        conn.execute(
+            """INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+               VALUES (?, ?, ?, 'system', ?)""",
+            (req["id"], req["status"], req["status"], close_note),
+        )
+        auto_closed += 1
+
+    conn.commit()
+    return {"auto_closed_denied": auto_closed}
+
+
+def run_request_lifecycle_rules(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+
+    escalation_result = run_high_demand_escalation(conn, now=now)
+    reminder_result = run_pending_approval_reminders(conn, now=now)
+    auto_close_result = run_stale_denied_auto_close(conn, now=now)
+
+    return {
+        "escalated": escalation_result["escalated"],
+        "reminded": reminder_result["reminded"],
+        "auto_closed_denied": auto_close_result["auto_closed_denied"],
+    }
+
+
 def get_request_stats(conn: sqlite3.Connection) -> dict:
     rows = conn.execute(
         "SELECT status, COUNT(*) as count FROM requests GROUP BY status"
@@ -409,6 +527,16 @@ def get_request_stats(conn: sqlite3.Connection) -> dict:
         (f"%{ESCALATION_MARKER}%",),
     ).fetchone()[0]
 
+    closed_denied = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM requests
+        WHERE status = 'denied'
+          AND admin_note LIKE ?
+        """,
+        (f"%{DENIED_AUTO_CLOSE_MARKER}%",),
+    ).fetchone()[0]
+
     return {
         "total": total,
         "pending": stats.get("pending", 0),
@@ -421,6 +549,7 @@ def get_request_stats(conn: sqlite3.Connection) -> dict:
         "open_over_14_days": sum(1 for age in open_ages if age >= 14),
         "oldest_open_days": max(open_ages) if open_ages else 0,
         "escalated_open": escalated_open,
+        "closed_denied": closed_denied,
     }
 
 

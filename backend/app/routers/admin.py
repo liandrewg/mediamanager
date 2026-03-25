@@ -24,10 +24,20 @@ async def get_all_requests(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=500),
     sort: str = Query("priority", pattern="^(priority|newest|oldest|supporters)$"),
+    include_auto_closed_denied: bool = Query(False),
     admin: dict = Depends(require_admin),
     db=Depends(get_db),
 ):
-    return request_service.get_all_requests(db, status, user_id, media_type, page, limit, sort)
+    return request_service.get_all_requests(
+        db,
+        status,
+        user_id,
+        media_type,
+        page,
+        limit,
+        sort,
+        include_auto_closed_denied=include_auto_closed_denied,
+    )
 
 
 @router.patch("/requests/{request_id}", response_model=RequestResponse)

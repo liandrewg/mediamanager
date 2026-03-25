@@ -38,17 +38,27 @@ class GetAllRequestsFilteringTests(unittest.TestCase):
         )
 
         rows = [
-            ("u1", "alice", 101, "movie", "Interstellar", "pending", "2026-03-10T10:00:00+00:00"),
-            ("u2", "bob", 202, "tv", "Severance", "approved", "2026-03-11T10:00:00+00:00"),
-            ("u3", "cara", 303, "book", "Dune", "pending", "2026-03-12T10:00:00+00:00"),
+            ("u1", "alice", 101, "movie", "Interstellar", "pending", None, "2026-03-10T10:00:00+00:00"),
+            ("u2", "bob", 202, "tv", "Severance", "approved", None, "2026-03-11T10:00:00+00:00"),
+            ("u3", "cara", 303, "book", "Dune", "pending", None, "2026-03-12T10:00:00+00:00"),
+            (
+                "u5",
+                "erin",
+                404,
+                "movie",
+                "Old Denial",
+                "denied",
+                "[AUTO-CLOSED-DENIED] stale denial closed",
+                "2026-03-01T10:00:00+00:00",
+            ),
         ]
-        for user_id, username, tmdb_id, media_type, title, status, created_at in rows:
+        for user_id, username, tmdb_id, media_type, title, status, admin_note, created_at in rows:
             cur = self.conn.execute(
                 """
-                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, admin_note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, username, tmdb_id, media_type, title, status, created_at, created_at),
+                (user_id, username, tmdb_id, media_type, title, status, admin_note, created_at, created_at),
             )
             req_id = cur.lastrowid
             self.conn.execute(
@@ -91,6 +101,26 @@ class GetAllRequestsFilteringTests(unittest.TestCase):
 
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["items"][0]["title"], "Interstellar")
+
+    def test_hides_auto_closed_denied_by_default(self):
+        result = request_service.get_all_requests(self.conn, sort="newest", page=1, limit=20)
+
+        titles = [item["title"] for item in result["items"]]
+        self.assertNotIn("Old Denial", titles)
+        self.assertEqual(result["total"], 3)
+
+    def test_can_include_auto_closed_denied_items(self):
+        result = request_service.get_all_requests(
+            self.conn,
+            status="denied",
+            include_auto_closed_denied=True,
+            sort="newest",
+            page=1,
+            limit=20,
+        )
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["title"], "Old Denial")
 
 
 class BulkStatusUpdateTests(unittest.TestCase):
@@ -272,6 +302,7 @@ class RequestStatsAgingTests(unittest.TestCase):
         self.assertEqual(stats["open_over_14_days"], 1)
         self.assertEqual(stats["oldest_open_days"], 15)
         self.assertEqual(stats["escalated_open"], 0)
+        self.assertEqual(stats["closed_denied"], 0)
 
 
 class HighDemandEscalationTests(unittest.TestCase):
@@ -370,6 +401,85 @@ class HighDemandEscalationTests(unittest.TestCase):
         self.assertEqual(history_rows[0]["new_status"], "pending")
         self.assertEqual(history_rows[0]["changed_by"], "system")
         self.assertIn("[AUTO-ESCALATED]", history_rows[0]["note"])
+
+
+class LifecycleRuleAutomationTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+            """
+        )
+
+        fixtures = [
+            ("u1", "alice", 500, "movie", "Stale Pending", "pending", None, "2026-03-01T00:00:00+00:00", "2026-03-01T00:00:00+00:00"),
+            ("u2", "bob", 600, "movie", "Stale Denied", "denied", "Manual denial note", "2026-02-20T00:00:00+00:00", "2026-03-01T00:00:00+00:00"),
+        ]
+        for row in fixtures:
+            self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, admin_note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row,
+            )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_unified_lifecycle_rules_apply_once(self):
+        frozen_now = datetime(2026, 3, 21, 0, 0, tzinfo=timezone.utc)
+
+        first = request_service.run_request_lifecycle_rules(self.conn, now=frozen_now)
+        second = request_service.run_request_lifecycle_rules(self.conn, now=frozen_now)
+
+        self.assertEqual(first["reminded"], 1)
+        self.assertEqual(first["auto_closed_denied"], 1)
+        self.assertEqual(second["reminded"], 0)
+        self.assertEqual(second["auto_closed_denied"], 0)
+
+        pending = self.conn.execute("SELECT admin_note FROM requests WHERE title = 'Stale Pending'").fetchone()
+        self.assertIn("[AUTO-PENDING-REMINDER]", pending["admin_note"])
+
+        denied = self.conn.execute("SELECT admin_note FROM requests WHERE title = 'Stale Denied'").fetchone()
+        self.assertIn("[AUTO-CLOSED-DENIED]", denied["admin_note"])
+
+        stats = request_service.get_request_stats(self.conn)
+        self.assertEqual(stats["closed_denied"], 1)
 
 
 if __name__ == "__main__":

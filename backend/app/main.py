@@ -12,7 +12,7 @@ from app.services.jellyfin_client import jellyfin_client
 from app.services.request_service import (
     get_open_requests,
     auto_fulfill_request,
-    run_high_demand_escalation,
+    run_request_lifecycle_rules,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,13 +92,18 @@ async def check_library_for_fulfilled_requests():
 
 
 async def run_daily_request_lifecycle():
-    """Daily lifecycle automation for high-demand stale requests."""
+    """Daily lifecycle automation for request queue maintenance rules."""
     while True:
         try:
             conn = get_db_connection()
-            result = run_high_demand_escalation(conn)
-            if result.get("escalated"):
-                logger.info("Escalated %d high-demand stale requests", result["escalated"])
+            result = run_request_lifecycle_rules(conn)
+            if any(result.values()):
+                logger.info(
+                    "Lifecycle rules applied: escalated=%d reminded=%d auto_closed_denied=%d",
+                    result["escalated"],
+                    result["reminded"],
+                    result["auto_closed_denied"],
+                )
             conn.close()
         except Exception:
             logger.exception("Error in request lifecycle automation task")
