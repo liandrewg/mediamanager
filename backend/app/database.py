@@ -263,6 +263,22 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_request_comments_request_id ON request_comments(request_id);
+
+        CREATE TABLE IF NOT EXISTS request_notifications (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id    INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+            user_id       TEXT NOT NULL,
+            type          TEXT NOT NULL,
+            message       TEXT NOT NULL,
+            actor_user_id TEXT,
+            actor_name    TEXT,
+            is_read       INTEGER NOT NULL DEFAULT 0,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_request_notifications_user_id ON request_notifications(user_id);
+        CREATE INDEX IF NOT EXISTS idx_request_notifications_request_id ON request_notifications(request_id);
+        CREATE INDEX IF NOT EXISTS idx_request_notifications_is_read ON request_notifications(is_read);
     """)
     conn.commit()
 

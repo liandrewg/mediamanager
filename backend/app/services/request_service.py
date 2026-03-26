@@ -64,6 +64,50 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
     return req
 
 
+def _create_request_notifications(
+    conn: sqlite3.Connection,
+    request_id: int,
+    event_type: str,
+    message: str,
+    actor_user_id: str | None = None,
+    actor_name: str | None = None,
+    exclude_user_id: str | None = None,
+) -> None:
+    try:
+        recipients = conn.execute(
+            "SELECT DISTINCT user_id FROM request_supporters WHERE request_id = ?",
+            (request_id,),
+        ).fetchall()
+
+        for recipient in recipients:
+            recipient_user_id = recipient["user_id"]
+            if exclude_user_id and recipient_user_id == exclude_user_id:
+                continue
+            conn.execute(
+                """
+                INSERT INTO request_notifications (request_id, user_id, type, message, actor_user_id, actor_name)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (request_id, recipient_user_id, event_type, message, actor_user_id, actor_name),
+            )
+    except sqlite3.OperationalError:
+        # Notification table may be absent in isolated unit tests using partial schemas.
+        return
+
+
+def _resolve_actor_name(conn: sqlite3.Connection, user_id: str) -> str:
+    try:
+        actor_name = conn.execute(
+            "SELECT username FROM user_roles WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if actor_name:
+            return actor_name["username"]
+    except sqlite3.OperationalError:
+        pass
+    return "Admin"
+
+
 def create_request(
     conn: sqlite3.Connection,
     user_id: str,
@@ -107,6 +151,15 @@ def create_request(
         conn.execute(
             "INSERT INTO request_supporters (request_id, user_id, username) VALUES (?, ?, ?)",
             (existing_open["id"], user_id, username),
+        )
+        _create_request_notifications(
+            conn,
+            existing_open["id"],
+            event_type="new_supporter",
+            message=f"{username} also requested this title.",
+            actor_user_id=user_id,
+            actor_name=username,
+            exclude_user_id=user_id,
         )
         conn.commit()
         refreshed = conn.execute("SELECT * FROM requests WHERE id = ?", (existing_open["id"],)).fetchone()
@@ -258,6 +311,16 @@ def update_request_status(
            VALUES (?, ?, ?, ?, ?)""",
         (request_id, old_status, new_status, changed_by, admin_note),
     )
+    if old_status != new_status:
+        display_actor_name = _resolve_actor_name(conn, changed_by)
+        _create_request_notifications(
+            conn,
+            request_id,
+            event_type="status_changed",
+            message=f"Request moved from {old_status} to {new_status}.",
+            actor_user_id=changed_by,
+            actor_name=display_actor_name,
+        )
     conn.commit()
     return get_request_by_id(conn, request_id)
 
@@ -293,6 +356,16 @@ def bulk_update_request_status(
                VALUES (?, ?, ?, ?, ?)""",
             (request_id, old_status, new_status, changed_by, admin_note),
         )
+        if old_status != new_status:
+            display_actor_name = _resolve_actor_name(conn, changed_by)
+            _create_request_notifications(
+                conn,
+                request_id,
+                event_type="status_changed",
+                message=f"Request moved from {old_status} to {new_status}.",
+                actor_user_id=changed_by,
+                actor_name=display_actor_name,
+            )
         updated.append(get_request_by_id(conn, request_id))
 
     conn.commit()
@@ -576,6 +649,14 @@ def auto_fulfill_request(conn: sqlite3.Connection, request_id: int) -> None:
         """INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
            VALUES (?, ?, 'fulfilled', 'system', 'Auto-fulfilled: found in Jellyfin library')""",
         (request_id, old_status),
+    )
+    _create_request_notifications(
+        conn,
+        request_id,
+        event_type="status_changed",
+        message=f"Request moved from {old_status} to fulfilled.",
+        actor_user_id="system",
+        actor_name="System",
     )
     conn.commit()
 

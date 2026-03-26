@@ -403,6 +403,107 @@ class HighDemandEscalationTests(unittest.TestCase):
         self.assertIn("[AUTO-ESCALATED]", history_rows[0]["note"])
 
 
+class RequestNotificationTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE request_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                actor_user_id TEXT,
+                actor_name TEXT,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
+            );
+
+            CREATE TABLE user_roles (
+                user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                role TEXT NOT NULL
+            );
+            """
+        )
+
+        self.conn.execute(
+            """
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES ('owner-1', 'owner', 101, 'movie', 'Interstellar', 'pending', '2026-03-10T10:00:00+00:00', '2026-03-10T10:00:00+00:00')
+            """
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'owner-1', 'owner', '2026-03-10T10:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'fan-2', 'fan', '2026-03-10T10:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO user_roles (user_id, username, role) VALUES ('admin-1', 'Casey Admin', 'admin')"
+        )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_status_change_creates_notifications_for_all_supporters(self):
+        request_service.update_request_status(
+            self.conn,
+            request_id=1,
+            new_status="approved",
+            changed_by="admin-1",
+            admin_note="Looks good",
+        )
+
+        rows = self.conn.execute(
+            "SELECT user_id, type, message, actor_name FROM request_notifications ORDER BY user_id"
+        ).fetchall()
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["user_id"], "fan-2")
+        self.assertEqual(rows[1]["user_id"], "owner-1")
+        self.assertTrue(all(r["type"] == "status_changed" for r in rows))
+        self.assertTrue(all("pending to approved" in r["message"] for r in rows))
+        self.assertTrue(all(r["actor_name"] == "Casey Admin" for r in rows))
+
+
 class LifecycleRuleAutomationTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")

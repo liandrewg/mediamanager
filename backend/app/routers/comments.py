@@ -94,6 +94,29 @@ async def add_comment(
             now,
         ),
     )
+
+    recipients = db.execute(
+        "SELECT DISTINCT user_id FROM request_supporters WHERE request_id = ?",
+        (request_id,),
+    ).fetchall()
+    for recipient in recipients:
+        recipient_user_id = recipient["user_id"]
+        if recipient_user_id == user["user_id"]:
+            continue
+        db.execute(
+            """
+            INSERT INTO request_notifications (request_id, user_id, type, message, actor_user_id, actor_name)
+            VALUES (?, ?, 'comment_added', ?, ?, ?)
+            """,
+            (
+                request_id,
+                recipient_user_id,
+                f"{user['username']} commented on this request.",
+                user["user_id"],
+                user["username"],
+            ),
+        )
+
     db.commit()
     comment = db.execute(
         "SELECT * FROM request_comments WHERE id = ?", (cursor.lastrowid,)
