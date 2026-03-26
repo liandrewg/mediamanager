@@ -38,6 +38,59 @@ export async function getAllRequests(
   return data
 }
 
+export interface RequestRecord {
+  id: number
+  user_id: string
+  username: string
+  tmdb_id: number
+  media_type: string
+  title: string
+  poster_path?: string | null
+  status: string
+  admin_note?: string | null
+  supporter_count: number
+  supporters: string[]
+  is_owner: boolean
+  user_supporting: boolean
+  days_open: number
+  priority_score: number
+  jellyfin_item_id?: string | null
+  watch_url?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DuplicateGroup {
+  group_id: string
+  media_type: string
+  normalized_title: string
+  matched_by_title: boolean
+  matched_by_tmdb: boolean
+  shared_tmdb_ids: number[]
+  request_ids: number[]
+  total_supporters: number
+  requests: RequestRecord[]
+}
+
+export interface DuplicateMergeResult {
+  target: RequestRecord
+  merged_source_ids: number[]
+  notifications_created: number
+}
+
+export async function getDuplicateRequestGroups(): Promise<DuplicateGroup[]> {
+  const { data } = await client.get('/admin/requests/duplicates')
+  return data
+}
+
+export async function mergeDuplicateRequests(targetRequestId: number, sourceRequestIds: number[]): Promise<DuplicateMergeResult> {
+  const { data } = await client.post('/admin/requests/duplicates/merge', {
+    target_request_id: targetRequestId,
+    source_request_ids: sourceRequestIds,
+  })
+  return data
+}
+
 export async function updateRequest(id: number, status: string, admin_note?: string) {
   const { data } = await client.patch(`/admin/requests/${id}`, { status, admin_note })
   return data

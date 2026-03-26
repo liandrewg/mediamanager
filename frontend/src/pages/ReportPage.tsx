@@ -1,7 +1,6 @@
-import { useState, FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createReport, getMyReports } from '../api/backlog'
-import RequestBadge from '../components/RequestBadge'
 
 const statusLabels: Record<string, string> = {
   reported: 'Reported',

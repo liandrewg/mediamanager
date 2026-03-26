@@ -44,6 +44,7 @@ ngrok tunnel (https://mediamanager.ngrok.app)
 ### Request System
 - Users request movies/TV shows from the detail page
 - Duplicate prevention (one active request per user per title)
+- Admins can consolidate overlapping active requests into a canonical request and merge supporter demand
 - Users can view and cancel their pending requests from "My Requests"
 - "New Request" button on My Requests page links to search
 
@@ -52,6 +53,7 @@ ngrok tunnel (https://mediamanager.ngrok.app)
   - **Board View**: Kanban-style columns (Pending → Approved → Fulfilled / Denied)
   - **Table View**: Full list with inline status actions
   - Sort controls (priority/newest/oldest/supporters) plus media-type filter (all/movies/tv/books)
+  - Duplicate management tab for reviewing likely duplicate active requests and merging them into a canonical request
   - Each status transition can include an optional admin note
   - Requests can be moved forwards or backwards through the pipeline
   - Bulk status updates endpoint for processing many requests at once

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 const navItems = [
@@ -13,7 +13,6 @@ const navItems = [
 export default function Layout() {
   const { user, logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
-  const location = useLocation()
 
   const closeMenu = () => setMenuOpen(false)
 

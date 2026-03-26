@@ -1,6 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getAllRequests, updateRequest, bulkUpdateRequests, getAdminStats, getUsers, updateUserRole, getHealthCheck, triggerJellyfinScan } from '../api/requests'
+import {
+  getAllRequests,
+  updateRequest,
+  bulkUpdateRequests,
+  getAdminStats,
+  getUsers,
+  updateUserRole,
+  getHealthCheck,
+  triggerJellyfinScan,
+  getDuplicateRequestGroups,
+  mergeDuplicateRequests,
+  type DuplicateGroup,
+} from '../api/requests'
 import { getAllBacklog, updateBacklogItem, deleteBacklogItem, getBacklogStats } from '../api/backlog'
 import { getTunnelStatus, startTunnel, stopTunnel } from '../api/tunnel'
 import { useAuth } from '../context/AuthContext'
@@ -74,7 +86,8 @@ const PRIORITY_STYLES: Record<string, string> = {
   critical: 'bg-red-600/30 text-red-300',
 }
 
-type Tab = 'requests' | 'backlog' | 'users' | 'tunnel' | 'health'
+type Tab = 'requests' | 'duplicates' | 'backlog' | 'users' | 'tunnel' | 'health'
+type DuplicateSelectionState = Record<string, { targetId: number; sourceIds: number[] }>
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('requests')
@@ -86,6 +99,7 @@ export default function AdminPage() {
   const [noteText, setNoteText] = useState('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
   const [selectedRequestIds, setSelectedRequestIds] = useState<Set<number>>(new Set())
+  const [duplicateSelections, setDuplicateSelections] = useState<DuplicateSelectionState>({})
 
   const toggleComments = (id: number) => {
     setExpandedComments((prev) => {
@@ -107,6 +121,12 @@ export default function AdminPage() {
     queryKey: ['adminRequests', sortBy, mediaTypeFilter],
     queryFn: () => getAllRequests(1, 500, undefined, sortBy, mediaTypeFilter === 'all' ? undefined : mediaTypeFilter),
     enabled: tab === 'requests',
+  })
+
+  const { data: duplicateGroups, isLoading: duplicatesLoading } = useQuery({
+    queryKey: ['duplicateRequestGroups'],
+    queryFn: getDuplicateRequestGroups,
+    enabled: tab === 'duplicates',
   })
 
   const { data: users, isLoading: usersLoading } = useQuery({
@@ -171,6 +191,16 @@ export default function AdminPage() {
     },
   })
 
+  const mergeDuplicatesMutation = useMutation({
+    mutationFn: ({ targetRequestId, sourceRequestIds }: { targetRequestId: number; sourceRequestIds: number[] }) =>
+      mergeDuplicateRequests(targetRequestId, sourceRequestIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['duplicateRequestGroups'] })
+      queryClient.invalidateQueries({ queryKey: ['adminRequests'] })
+      queryClient.invalidateQueries({ queryKey: ['adminStats'] })
+    },
+  })
+
   const bulkUpdateMutation = useMutation({
     mutationFn: ({ requestIds, status }: { requestIds: number[]; status: string }) =>
       bulkUpdateRequests(requestIds, status, `Bulk update from admin table (${requestIds.length} requests)`),
@@ -226,6 +256,35 @@ export default function AdminPage() {
           ['pending', 'approved'].includes(req.status) ? (req.days_open || 0) >= minAge : true
         )
 
+  useEffect(() => {
+    if (!duplicateGroups) return
+
+    setDuplicateSelections((prev) => {
+      const next: DuplicateSelectionState = {}
+
+      duplicateGroups.forEach((group) => {
+        const requestIds = group.requests.map((request) => request.id)
+        if (requestIds.length === 0) return
+
+        const existing = prev[group.group_id]
+        const targetId =
+          existing && requestIds.includes(existing.targetId)
+            ? existing.targetId
+            : group.requests[0].id
+        const existingSourceIds = existing?.sourceIds.filter(
+          (sourceId) => requestIds.includes(sourceId) && sourceId !== targetId
+        ) || []
+
+        next[group.group_id] = {
+          targetId,
+          sourceIds: existingSourceIds.length > 0 ? existingSourceIds : requestIds.filter((id) => id !== targetId),
+        }
+      })
+
+      return next
+    })
+  }, [duplicateGroups])
+
   const getAgeBadgeClass = (daysOpen: number) => {
     if (daysOpen >= 14) return 'bg-red-600/20 text-red-300 border border-red-500/30'
     if (daysOpen >= 7) return 'bg-amber-600/20 text-amber-300 border border-amber-500/30'
@@ -273,6 +332,51 @@ export default function AdminPage() {
   const bulkMove = (status: string) => {
     if (selectedRequestIds.size === 0) return
     bulkUpdateMutation.mutate({ requestIds: Array.from(selectedRequestIds), status })
+  }
+
+  const getDuplicateSelection = (group: DuplicateGroup) =>
+    duplicateSelections[group.group_id] || {
+      targetId: group.requests[0]?.id || 0,
+      sourceIds: group.requests.slice(1).map((request) => request.id),
+    }
+
+  const updateDuplicateTarget = (group: DuplicateGroup, targetId: number) => {
+    const requestIds = group.requests.map((request) => request.id)
+    setDuplicateSelections((prev) => ({
+      ...prev,
+      [group.group_id]: {
+        targetId,
+        sourceIds: requestIds.filter((requestId) => requestId !== targetId),
+      },
+    }))
+  }
+
+  const toggleDuplicateSource = (group: DuplicateGroup, sourceId: number) => {
+    const fallback = getDuplicateSelection(group)
+    if (fallback.targetId === sourceId) return
+
+    setDuplicateSelections((prev) => {
+      const current = prev[group.group_id] || fallback
+      const alreadySelected = current.sourceIds.includes(sourceId)
+      return {
+        ...prev,
+        [group.group_id]: {
+          targetId: current.targetId,
+          sourceIds: alreadySelected
+            ? current.sourceIds.filter((requestId) => requestId !== sourceId)
+            : [...current.sourceIds, sourceId].sort((left, right) => left - right),
+        },
+      }
+    })
+  }
+
+  const mergeDuplicateGroup = (group: DuplicateGroup) => {
+    const selection = getDuplicateSelection(group)
+    if (!selection.targetId || selection.sourceIds.length === 0) return
+    mergeDuplicatesMutation.mutate({
+      targetRequestId: selection.targetId,
+      sourceRequestIds: selection.sourceIds,
+    })
   }
 
   return (
@@ -344,6 +448,16 @@ export default function AdminPage() {
           }`}
         >
           Requests
+        </button>
+        <button
+          onClick={() => setTab('duplicates')}
+          className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+            tab === 'duplicates'
+              ? 'border-blue-500 text-blue-400'
+              : 'border-transparent text-slate-400 hover:text-white'
+          }`}
+        >
+          Duplicates
         </button>
         <button
           onClick={() => setTab('backlog')}
@@ -583,6 +697,157 @@ export default function AdminPage() {
             </>
           )}
         </>
+      )}
+
+      {/* ========== DUPLICATES TAB ========== */}
+      {tab === 'duplicates' && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
+            Pick a canonical request for each active duplicate group. Selected source requests will be denied, their supporters
+            will move to the target, and impacted users will be notified.
+          </div>
+
+          {duplicatesLoading && <p className="text-slate-400">Scanning active requests for likely duplicates...</p>}
+
+          {!duplicatesLoading && duplicateGroups && duplicateGroups.length === 0 && (
+            <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-6 py-12 text-center">
+              <p className="text-white font-medium">No active duplicate groups found.</p>
+              <p className="text-sm text-slate-500 mt-2">Pending and approved requests are currently consolidated.</p>
+            </div>
+          )}
+
+          {!duplicatesLoading && duplicateGroups && duplicateGroups.length > 0 && (
+            <div className="space-y-4">
+              {duplicateGroups.map((group) => {
+                const selection = getDuplicateSelection(group)
+                const isMergingGroup =
+                  mergeDuplicatesMutation.isPending &&
+                  mergeDuplicatesMutation.variables?.targetRequestId === selection.targetId
+
+                return (
+                  <div key={group.group_id} className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900/70">
+                    <div className="flex flex-col gap-3 border-b border-slate-700/60 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-blue-600/20 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-blue-300">
+                            {group.media_type}
+                          </span>
+                          {group.matched_by_title && (
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                              Same title
+                            </span>
+                          )}
+                          {group.matched_by_tmdb && (
+                            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                              Same TMDB
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="mt-2 text-lg font-semibold text-white">
+                          {group.requests[0]?.title || group.normalized_title}
+                        </h3>
+                        <p className="text-sm text-slate-400">
+                          {group.requests.length} active requests · {group.total_supporters} combined supporters
+                        </p>
+                        {group.shared_tmdb_ids.length > 0 && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            Shared TMDB IDs: {group.shared_tmdb_ids.join(', ')}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-2 lg:items-end">
+                        <p className="max-w-sm text-xs text-slate-400">
+                          The target keeps its current status. All selected source requests are merged into it and then denied.
+                        </p>
+                        <button
+                          onClick={() => mergeDuplicateGroup(group)}
+                          disabled={!selection.targetId || selection.sourceIds.length === 0 || mergeDuplicatesMutation.isPending}
+                          className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-40"
+                        >
+                          {isMergingGroup ? 'Merging...' : `Merge ${selection.sourceIds.length} into #${selection.targetId}`}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="divide-y divide-slate-800">
+                      {group.requests.map((request) => {
+                        const isTarget = selection.targetId === request.id
+                        const selectedSource = selection.sourceIds.includes(request.id)
+
+                        return (
+                          <div
+                            key={request.id}
+                            className={`grid gap-3 px-4 py-4 lg:grid-cols-[96px,96px,minmax(0,1fr),88px,120px] ${
+                              isTarget ? 'bg-blue-500/5' : ''
+                            }`}
+                          >
+                            <label className="flex items-center gap-2 text-sm text-slate-300">
+                              <input
+                                type="radio"
+                                name={`duplicate-target-${group.group_id}`}
+                                checked={isTarget}
+                                onChange={() => updateDuplicateTarget(group, request.id)}
+                                className="h-4 w-4 border-slate-500 bg-slate-900 text-blue-500 focus:ring-blue-500"
+                              />
+                              <span>Target</span>
+                            </label>
+
+                            <label className="flex items-center gap-2 text-sm text-slate-300">
+                              <input
+                                type="checkbox"
+                                checked={selectedSource}
+                                onChange={() => toggleDuplicateSource(group, request.id)}
+                                disabled={isTarget}
+                                className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-blue-500 focus:ring-blue-500 disabled:opacity-40"
+                              />
+                              <span>Merge</span>
+                            </label>
+
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-medium text-white">{request.title}</p>
+                                <span className="text-xs text-slate-500">#{request.id}</span>
+                                <RequestBadge status={request.status} />
+                              </div>
+                              <p className="mt-1 text-xs text-slate-400">
+                                {request.username} · {request.supporter_count} supporter
+                                {request.supporter_count === 1 ? '' : 's'} · {new Date(request.created_at).toLocaleDateString()}
+                              </p>
+                              {request.admin_note && (
+                                <p className="mt-2 line-clamp-2 text-xs italic text-slate-500">{request.admin_note}</p>
+                              )}
+                            </div>
+
+                            <div className="text-xs text-slate-400">
+                              <p className="font-medium text-slate-300">TMDB</p>
+                              <p>{request.tmdb_id}</p>
+                            </div>
+
+                            <div className="text-xs text-slate-500 lg:text-right">
+                              {isTarget ? (
+                                <span className="font-medium text-blue-300">Canonical target</span>
+                              ) : selectedSource ? (
+                                <span className="font-medium text-emerald-300">Will merge</span>
+                              ) : (
+                                <span>Not selected</span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {mergeDuplicatesMutation.isError && (
+            <p className="text-sm text-red-400">
+              {(mergeDuplicatesMutation.error as any)?.response?.data?.detail || 'Failed to merge duplicate requests'}
+            </p>
+          )}
+        </div>
       )}
 
       {/* ========== BACKLOG TAB ========== */}

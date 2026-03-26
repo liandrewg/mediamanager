@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional
 
@@ -61,6 +61,29 @@ class PaginatedResponse(BaseModel):
     page: int
     limit: int
     total_pages: int
+
+
+class DuplicateGroupResponse(BaseModel):
+    group_id: str
+    media_type: str
+    normalized_title: str
+    matched_by_title: bool
+    matched_by_tmdb: bool
+    shared_tmdb_ids: list[int] = []
+    request_ids: list[int] = []
+    total_supporters: int
+    requests: list[RequestResponse] = []
+
+
+class DuplicateMergeRequest(BaseModel):
+    target_request_id: int
+    source_request_ids: list[int] = Field(..., min_length=1)
+
+
+class DuplicateMergeResponse(BaseModel):
+    target: RequestResponse
+    merged_source_ids: list[int] = []
+    notifications_created: int
 
 
 # --- TMDB ---

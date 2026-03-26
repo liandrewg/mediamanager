@@ -504,6 +504,260 @@ class RequestNotificationTests(unittest.TestCase):
         self.assertTrue(all(r["actor_name"] == "Casey Admin" for r in rows))
 
 
+class DuplicateRequestConsolidationTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE request_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                actor_user_id TEXT,
+                actor_name TEXT,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
+            );
+
+            CREATE TABLE request_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                body TEXT NOT NULL,
+                created_at TEXT
+            );
+
+            CREATE TABLE user_roles (
+                user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                role TEXT NOT NULL
+            );
+            """
+        )
+
+    def tearDown(self):
+        self.conn.close()
+
+    def create_request(
+        self,
+        user_id: str,
+        username: str,
+        tmdb_id: int,
+        media_type: str,
+        title: str,
+        status: str,
+        created_at: str,
+        admin_note: str | None = None,
+        poster_path: str | None = None,
+    ) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, poster_path, status, admin_note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, username, tmdb_id, media_type, title, poster_path, status, admin_note, created_at, created_at),
+        )
+        request_id = cursor.lastrowid
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+            (request_id, user_id, username, created_at),
+        )
+        return request_id
+
+    def add_supporter(self, request_id: int, user_id: str, username: str, created_at: str) -> None:
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+            (request_id, user_id, username, created_at),
+        )
+
+    def test_detects_duplicate_groups_by_normalized_title_and_tmdb(self):
+        request_one = self.create_request(
+            "user-1", "alice", 501, "movie", "Dune", "pending", "2026-03-10T10:00:00+00:00"
+        )
+        request_two = self.create_request(
+            "user-2", "bob", 777, "movie", "  dune  ", "approved", "2026-03-09T10:00:00+00:00"
+        )
+        request_three = self.create_request(
+            "user-3", "cara", 777, "movie", "Dune Part One", "pending", "2026-03-11T10:00:00+00:00"
+        )
+        self.add_supporter(request_one, "fan-1", "fan", "2026-03-12T10:00:00+00:00")
+
+        self.create_request(
+            "user-4", "dan", 777, "tv", "Dune", "pending", "2026-03-11T12:00:00+00:00"
+        )
+        self.create_request(
+            "user-5", "erin", 777, "movie", "Dune", "fulfilled", "2026-03-08T10:00:00+00:00"
+        )
+        self.conn.commit()
+
+        groups = request_service.get_duplicate_request_groups(self.conn)
+
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group["media_type"], "movie")
+        self.assertEqual(group["normalized_title"], "dune")
+        self.assertTrue(group["matched_by_title"])
+        self.assertTrue(group["matched_by_tmdb"])
+        self.assertEqual(group["shared_tmdb_ids"], [777])
+        self.assertEqual(set(group["request_ids"]), {request_one, request_two, request_three})
+        self.assertEqual(group["requests"][0]["id"], request_two)
+        self.assertEqual(group["total_supporters"], 4)
+
+    def test_merge_moves_supporters_preserves_target_and_notifies_impacted_users(self):
+        target_request = self.create_request(
+            "owner-1",
+            "alice",
+            1001,
+            "movie",
+            "Arrival",
+            "pending",
+            "2026-03-10T10:00:00+00:00",
+        )
+        source_request_a = self.create_request(
+            "owner-2",
+            "bob",
+            1002,
+            "movie",
+            "  arrival ",
+            "approved",
+            "2026-03-05T10:00:00+00:00",
+            admin_note="Prefer Blu-ray rip",
+            poster_path="/arrival-a.jpg",
+        )
+        source_request_b = self.create_request(
+            "owner-3",
+            "cara",
+            1002,
+            "movie",
+            "Arrival (2016)",
+            "pending",
+            "2026-03-08T10:00:00+00:00",
+        )
+        self.add_supporter(target_request, "shared-1", "sam", "2026-03-11T00:00:00+00:00")
+        self.add_supporter(source_request_a, "shared-1", "sam", "2026-03-06T00:00:00+00:00")
+        self.add_supporter(source_request_b, "fan-2", "max", "2026-03-09T00:00:00+00:00")
+        self.conn.execute(
+            "INSERT INTO user_roles (user_id, username, role) VALUES ('admin-1', 'Casey Admin', 'admin')"
+        )
+        self.conn.commit()
+
+        result = request_service.merge_duplicate_requests(
+            self.conn,
+            target_request_id=target_request,
+            source_request_ids=[source_request_b, source_request_a],
+            changed_by="admin-1",
+        )
+
+        merged_target = result["target"]
+        self.assertEqual(merged_target["id"], target_request)
+        self.assertEqual(merged_target["status"], "pending")
+        self.assertEqual(merged_target["created_at"], "2026-03-05T10:00:00+00:00")
+        self.assertEqual(merged_target["poster_path"], "/arrival-a.jpg")
+        self.assertEqual(merged_target["supporter_count"], 5)
+        self.assertIn("Prefer Blu-ray rip", merged_target["admin_note"])
+        self.assertIn("[DUPLICATE-MERGE]", merged_target["admin_note"])
+        self.assertIn(f"#{source_request_a}", merged_target["admin_note"])
+        self.assertIn(f"#{source_request_b}", merged_target["admin_note"])
+
+        target_supporters = self.conn.execute(
+            "SELECT user_id, created_at FROM request_supporters WHERE request_id = ? ORDER BY user_id",
+            (target_request,),
+        ).fetchall()
+        self.assertEqual(
+            {row["user_id"] for row in target_supporters},
+            {"owner-1", "owner-2", "owner-3", "shared-1", "fan-2"},
+        )
+        shared_supporter = next(row for row in target_supporters if row["user_id"] == "shared-1")
+        self.assertEqual(shared_supporter["created_at"], "2026-03-06T00:00:00+00:00")
+
+        remaining_source_supporters = self.conn.execute(
+            "SELECT COUNT(*) FROM request_supporters WHERE request_id IN (?, ?)",
+            (source_request_a, source_request_b),
+        ).fetchone()[0]
+        self.assertEqual(remaining_source_supporters, 0)
+
+        source_rows = self.conn.execute(
+            "SELECT id, status, admin_note FROM requests WHERE id IN (?, ?) ORDER BY id",
+            (source_request_a, source_request_b),
+        ).fetchall()
+        self.assertTrue(all(row["status"] == "denied" for row in source_rows))
+        self.assertTrue(all(f"#{target_request}" in row["admin_note"] for row in source_rows))
+
+        history_rows = self.conn.execute(
+            "SELECT request_id, old_status, new_status, changed_by, note FROM request_history ORDER BY id"
+        ).fetchall()
+        self.assertEqual(len(history_rows), 3)
+        self.assertEqual(history_rows[0]["request_id"], target_request)
+        self.assertEqual(history_rows[0]["old_status"], "pending")
+        self.assertEqual(history_rows[0]["new_status"], "pending")
+        self.assertIn("[DUPLICATE-MERGE]", history_rows[0]["note"])
+        self.assertEqual(history_rows[1]["new_status"], "denied")
+        self.assertEqual(history_rows[2]["new_status"], "denied")
+
+        comment_row = self.conn.execute(
+            "SELECT user_id, username, is_admin, body FROM request_comments WHERE request_id = ?",
+            (target_request,),
+        ).fetchone()
+        self.assertEqual(comment_row["user_id"], "system")
+        self.assertEqual(comment_row["username"], "System")
+        self.assertEqual(comment_row["is_admin"], 1)
+        self.assertIn("[DUPLICATE-MERGE]", comment_row["body"])
+
+        notification_rows = self.conn.execute(
+            "SELECT request_id, user_id, type, actor_name, message FROM request_notifications ORDER BY user_id"
+        ).fetchall()
+        self.assertEqual(result["notifications_created"], 4)
+        self.assertEqual(
+            {row["user_id"] for row in notification_rows},
+            {"owner-2", "owner-3", "shared-1", "fan-2"},
+        )
+        self.assertTrue(all(row["request_id"] == target_request for row in notification_rows))
+        self.assertTrue(all(row["type"] == "request_merged" for row in notification_rows))
+        self.assertTrue(all(row["actor_name"] == "Casey Admin" for row in notification_rows))
+        self.assertTrue(all(f"#{target_request}" in row["message"] for row in notification_rows))
+
+        self.assertEqual(request_service.get_duplicate_request_groups(self.conn), [])
+
+
 class LifecycleRuleAutomationTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")

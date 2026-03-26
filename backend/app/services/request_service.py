@@ -9,6 +9,8 @@ OPEN_REQUEST_STATUSES = ("pending", "approved")
 ESCALATION_MIN_SUPPORTERS = 3
 ESCALATION_MIN_AGE_DAYS = 10
 ESCALATION_MARKER = "[AUTO-ESCALATED]"
+DUPLICATE_MERGE_MARKER = "[DUPLICATE-MERGE]"
+DUPLICATE_SOURCE_MERGED_MARKER = "[DUPLICATE-MERGED]"
 
 PENDING_REMINDER_MIN_AGE_DAYS = 3
 PENDING_REMINDER_MARKER = "[AUTO-PENDING-REMINDER]"
@@ -106,6 +108,165 @@ def _resolve_actor_name(conn: sqlite3.Connection, user_id: str) -> str:
     except sqlite3.OperationalError:
         pass
     return "Admin"
+
+
+def _normalize_title(title: str | None) -> str:
+    return " ".join((title or "").casefold().split())
+
+
+def _append_admin_note(existing_note: str | None, new_note: str) -> str:
+    note = (existing_note or "").strip()
+    if not note:
+        return new_note
+    return f"{note}\n\n{new_note}"
+
+
+def _create_request_notifications_for_users(
+    conn: sqlite3.Connection,
+    request_id: int,
+    user_ids: set[str] | list[str],
+    event_type: str,
+    message: str,
+    actor_user_id: str | None = None,
+    actor_name: str | None = None,
+) -> int:
+    created = 0
+    try:
+        for user_id in sorted(set(user_ids)):
+            conn.execute(
+                """
+                INSERT INTO request_notifications (request_id, user_id, type, message, actor_user_id, actor_name)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (request_id, user_id, event_type, message, actor_user_id, actor_name),
+            )
+            created += 1
+    except sqlite3.OperationalError:
+        return 0
+    return created
+
+
+def _add_system_comment(
+    conn: sqlite3.Connection,
+    request_id: int,
+    body: str,
+    created_at: str,
+) -> None:
+    try:
+        conn.execute(
+            """
+            INSERT INTO request_comments (request_id, user_id, username, is_admin, body, created_at)
+            VALUES (?, 'system', 'System', 1, ?, ?)
+            """,
+            (request_id, body, created_at),
+        )
+    except sqlite3.OperationalError:
+        return
+
+
+def _get_active_duplicate_candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT r.*,
+               (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) as supporter_count
+        FROM requests r
+        WHERE r.status IN ('pending', 'approved')
+        ORDER BY CASE r.status WHEN 'approved' THEN 0 ELSE 1 END, r.created_at ASC, r.id ASC
+        """
+    ).fetchall()
+
+
+def _build_duplicate_groups(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+) -> list[dict]:
+    if len(rows) < 2:
+        return []
+
+    items: list[dict] = []
+    parent: dict[int, int] = {}
+    title_groups: dict[tuple[str, str], list[int]] = {}
+    tmdb_groups: dict[tuple[str, int], list[int]] = {}
+
+    for row in rows:
+        item = dict(row)
+        item["normalized_title"] = _normalize_title(item.get("title"))
+        items.append(item)
+        parent[item["id"]] = item["id"]
+        title_groups.setdefault((item["media_type"], item["normalized_title"]), []).append(item["id"])
+        tmdb_groups.setdefault((item["media_type"], item["tmdb_id"]), []).append(item["id"])
+
+    def find(request_id: int) -> int:
+        while parent[request_id] != request_id:
+            parent[request_id] = parent[parent[request_id]]
+            request_id = parent[request_id]
+        return request_id
+
+    def union(left_id: int, right_id: int) -> None:
+        left_root = find(left_id)
+        right_root = find(right_id)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for request_ids in title_groups.values():
+        anchor = request_ids[0]
+        for request_id in request_ids[1:]:
+            union(anchor, request_id)
+
+    for request_ids in tmdb_groups.values():
+        anchor = request_ids[0]
+        for request_id in request_ids[1:]:
+            union(anchor, request_id)
+
+    grouped_items: dict[int, list[dict]] = {}
+    for item in items:
+        grouped_items.setdefault(find(item["id"]), []).append(item)
+
+    duplicate_groups: list[dict] = []
+    for group_items in grouped_items.values():
+        if len(group_items) < 2:
+            continue
+
+        group_items.sort(
+            key=lambda item: (
+                0 if item["status"] == "approved" else 1,
+                _parse_request_datetime(item.get("created_at")),
+                item["id"],
+            )
+        )
+        title_counts: dict[str, int] = {}
+        tmdb_counts: dict[int, int] = {}
+        for item in group_items:
+            title_counts[item["normalized_title"]] = title_counts.get(item["normalized_title"], 0) + 1
+            tmdb_counts[item["tmdb_id"]] = tmdb_counts.get(item["tmdb_id"], 0) + 1
+
+        requests = [_serialize_request(conn, item) for item in group_items]
+        duplicate_groups.append(
+            {
+                "group_id": f"dup-{'-'.join(str(item['id']) for item in group_items)}",
+                "media_type": group_items[0]["media_type"],
+                "normalized_title": max(
+                    title_counts.items(),
+                    key=lambda entry: (entry[1], -len(entry[0]), entry[0]),
+                )[0],
+                "matched_by_title": any(count > 1 for count in title_counts.values()),
+                "matched_by_tmdb": any(count > 1 for count in tmdb_counts.values()),
+                "shared_tmdb_ids": sorted(tmdb_id for tmdb_id, count in tmdb_counts.items() if count > 1),
+                "request_ids": [request["id"] for request in requests],
+                "total_supporters": sum(request["supporter_count"] for request in requests),
+                "requests": requests,
+            }
+        )
+
+    duplicate_groups.sort(
+        key=lambda group: (
+            -len(group["request_ids"]),
+            -group["total_supporters"],
+            group["media_type"],
+            group["request_ids"][0],
+        )
+    )
+    return duplicate_groups
 
 
 def create_request(
@@ -281,6 +442,11 @@ def get_all_requests(
     }
 
 
+def get_duplicate_request_groups(conn: sqlite3.Connection) -> list[dict]:
+    active_rows = _get_active_duplicate_candidate_rows(conn)
+    return _build_duplicate_groups(conn, active_rows)
+
+
 def update_request_status(
     conn: sqlite3.Connection,
     request_id: int,
@@ -412,6 +578,228 @@ def delete_request(conn: sqlite3.Connection, request_id: int, user_id: str) -> b
 
     conn.commit()
     return True
+
+
+def merge_duplicate_requests(
+    conn: sqlite3.Connection,
+    target_request_id: int,
+    source_request_ids: list[int],
+    changed_by: str,
+) -> dict:
+    deduped_source_ids: list[int] = []
+    seen_source_ids: set[int] = set()
+    for source_id in source_request_ids:
+        if source_id == target_request_id:
+            raise ValueError("Target request cannot also be listed as a source")
+        if source_id in seen_source_ids:
+            continue
+        seen_source_ids.add(source_id)
+        deduped_source_ids.append(source_id)
+
+    if not deduped_source_ids:
+        raise ValueError("At least one source request must be selected")
+
+    requested_ids = [target_request_id, *deduped_source_ids]
+    placeholders = ",".join("?" for _ in requested_ids)
+    rows = conn.execute(
+        f"SELECT * FROM requests WHERE id IN ({placeholders})",
+        requested_ids,
+    ).fetchall()
+    if len(rows) != len(requested_ids):
+        found_ids = {row["id"] for row in rows}
+        missing_ids = [request_id for request_id in requested_ids if request_id not in found_ids]
+        raise ValueError(f"Request not found: {missing_ids[0]}")
+
+    request_rows = {row["id"]: dict(row) for row in rows}
+    target_row = request_rows[target_request_id]
+    source_rows = [request_rows[source_id] for source_id in deduped_source_ids]
+
+    if any(row["status"] not in OPEN_REQUEST_STATUSES for row in rows):
+        raise ValueError("Only pending or approved requests can be merged")
+
+    media_types = {row["media_type"] for row in rows}
+    if len(media_types) != 1:
+        raise ValueError("Only requests with the same media type can be merged")
+
+    duplicate_groups = get_duplicate_request_groups(conn)
+    target_group = next(
+        (set(group["request_ids"]) for group in duplicate_groups if target_request_id in group["request_ids"]),
+        None,
+    )
+    if not target_group or any(source_id not in target_group for source_id in deduped_source_ids):
+        raise ValueError("Selected requests are not in the same duplicate group")
+
+    ordered_sources = sorted(
+        source_rows,
+        key=lambda row: (
+            _parse_request_datetime(row.get("created_at")),
+            row["id"],
+        ),
+    )
+    actor_name = _resolve_actor_name(conn, changed_by)
+    now = datetime.utcnow().isoformat()
+    merged_rows = [target_row, *ordered_sources]
+    earliest_request = min(
+        merged_rows,
+        key=lambda row: (_parse_request_datetime(row.get("created_at")), row["id"]),
+    )
+    target_note_seed = (target_row.get("admin_note") or "").strip()
+    if not target_note_seed:
+        for source_row in ordered_sources:
+            source_note = (source_row.get("admin_note") or "").strip()
+            if source_note:
+                target_note_seed = source_note
+                break
+
+    source_summary = ", ".join(f"#{row['id']} \"{row['title']}\"" for row in ordered_sources)
+    merge_note = (
+        f"{DUPLICATE_MERGE_MARKER} Consolidated duplicate requests into canonical request "
+        f"#{target_request_id}: {source_summary}."
+    )
+    target_note = _append_admin_note(target_note_seed, merge_note)
+    source_admin_note = (
+        f"{DUPLICATE_SOURCE_MERGED_MARKER} Merged into request "
+        f"#{target_request_id} ({target_row['title']}). Support moved to the canonical request."
+    )
+
+    supporter_rows = conn.execute(
+        f"""
+        SELECT request_id, user_id, username, created_at
+        FROM request_supporters
+        WHERE request_id IN ({placeholders})
+        ORDER BY created_at ASC, id ASC
+        """,
+        requested_ids,
+    ).fetchall()
+    source_impacted_user_ids: set[str] = set()
+    supporters_by_user: dict[str, dict] = {}
+    for supporter_row in supporter_rows:
+        supporter = dict(supporter_row)
+        if supporter["request_id"] in deduped_source_ids:
+            source_impacted_user_ids.add(supporter["user_id"])
+
+        existing = supporters_by_user.get(supporter["user_id"])
+        supporter_created_at = _parse_request_datetime(supporter.get("created_at"))
+        if not existing:
+            supporters_by_user[supporter["user_id"]] = supporter
+            continue
+
+        existing_created_at = _parse_request_datetime(existing.get("created_at"))
+        if supporter_created_at < existing_created_at:
+            supporters_by_user[supporter["user_id"]] = supporter
+
+    target_supporter_rows = conn.execute(
+        """
+        SELECT id, user_id, username, created_at
+        FROM request_supporters
+        WHERE request_id = ?
+        """,
+        (target_request_id,),
+    ).fetchall()
+    target_supporters = {row["user_id"]: dict(row) for row in target_supporter_rows}
+
+    try:
+        for user_id, supporter in supporters_by_user.items():
+            if user_id in target_supporters:
+                conn.execute(
+                    """
+                    UPDATE request_supporters
+                    SET username = ?, created_at = ?
+                    WHERE request_id = ? AND user_id = ?
+                    """,
+                    (
+                        supporter["username"],
+                        supporter["created_at"],
+                        target_request_id,
+                        user_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO request_supporters (request_id, user_id, username, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        target_request_id,
+                        user_id,
+                        supporter["username"],
+                        supporter["created_at"],
+                    ),
+                )
+
+        source_placeholders = ",".join("?" for _ in deduped_source_ids)
+        conn.execute(
+            f"DELETE FROM request_supporters WHERE request_id IN ({source_placeholders})",
+            deduped_source_ids,
+        )
+
+        target_poster_path = target_row.get("poster_path") or next(
+            (row.get("poster_path") for row in ordered_sources if row.get("poster_path")),
+            None,
+        )
+        conn.execute(
+            """
+            UPDATE requests
+            SET poster_path = ?, admin_note = ?, created_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                target_poster_path,
+                target_note,
+                earliest_request["created_at"],
+                now,
+                target_request_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (target_request_id, target_row["status"], target_row["status"], changed_by, merge_note),
+        )
+        _add_system_comment(conn, target_request_id, merge_note, now)
+
+        for source_row in ordered_sources:
+            conn.execute(
+                """
+                UPDATE requests
+                SET status = 'denied', admin_note = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (source_admin_note, now, source_row["id"]),
+            )
+            conn.execute(
+                """
+                INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+                VALUES (?, ?, 'denied', ?, ?)
+                """,
+                (source_row["id"], source_row["status"], changed_by, source_admin_note),
+            )
+
+        notifications_created = _create_request_notifications_for_users(
+            conn,
+            target_request_id,
+            source_impacted_user_ids,
+            event_type="request_merged",
+            message=(
+                f"Your duplicate request support was merged into request "
+                f"#{target_request_id} ({target_row['title']})."
+            ),
+            actor_user_id=changed_by,
+            actor_name=actor_name,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return {
+        "target": get_request_by_id(conn, target_request_id),
+        "merged_source_ids": deduped_source_ids,
+        "notifications_created": notifications_created,
+    }
 
 
 def run_high_demand_escalation(

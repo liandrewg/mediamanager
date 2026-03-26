@@ -1,6 +1,6 @@
 # Media Manager
 
-A self-hosted web application for managing media requests against a Jellyfin server. Users browse and search for movies/TV shows via TMDB, submit requests, and admins manage the request pipeline.
+A self-hosted web application for managing media requests against a Jellyfin server. Users browse and search for movies/TV shows via TMDB, submit requests, and admins manage the request pipeline, including duplicate-request consolidation with merged supporter demand.
 
 ## Prerequisites
 

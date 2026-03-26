@@ -7,7 +7,14 @@ import httpx
 
 from app.dependencies import require_admin, get_current_user
 from app.database import get_db
-from app.schemas import RequestUpdate, RequestResponse, PaginatedResponse
+from app.schemas import (
+    RequestUpdate,
+    RequestResponse,
+    PaginatedResponse,
+    DuplicateGroupResponse,
+    DuplicateMergeRequest,
+    DuplicateMergeResponse,
+)
 from app.services import request_service
 from app.services.jellyfin_client import jellyfin_client
 
@@ -38,6 +45,31 @@ async def get_all_requests(
         sort,
         include_auto_closed_denied=include_auto_closed_denied,
     )
+
+
+@router.get("/requests/duplicates", response_model=list[DuplicateGroupResponse])
+async def list_duplicate_request_groups(
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    return request_service.get_duplicate_request_groups(db)
+
+
+@router.post("/requests/duplicates/merge", response_model=DuplicateMergeResponse)
+async def merge_duplicate_request_group(
+    body: DuplicateMergeRequest,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    try:
+        return request_service.merge_duplicate_requests(
+            db,
+            target_request_id=body.target_request_id,
+            source_request_ids=body.source_request_ids,
+            changed_by=admin["user_id"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.patch("/requests/{request_id}", response_model=RequestResponse)
