@@ -5,6 +5,10 @@ __pycache__/
 venv/
 .venv/
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.db.bak.*
 
 # Environment
 .env
