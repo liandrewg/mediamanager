@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { searchMedia } from '../api/tmdb'
 import { searchBooks } from '../api/books'
@@ -29,10 +30,29 @@ function mapBookResults(results: any[]) {
 }
 
 export default function SearchPage() {
-  const [query, setQuery] = useState('')
-  const [page, setPage] = useState(1)
-  const [filter, setFilter] = useState<FilterValue>('all')
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const query = searchParams.get('q') ?? ''
+  const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1)
+  const filter = (FILTER_OPTIONS.some(o => o.value === searchParams.get('filter'))
+    ? searchParams.get('filter')!
+    : 'all') as FilterValue
+
   const debouncedQuery = useDebounce(query, 400)
+
+  const updateParams = useCallback((updates: Record<string, string | null>) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      for (const [k, v] of Object.entries(updates)) {
+        if (v === null || v === '' || (k === 'page' && v === '1') || (k === 'filter' && v === 'all')) {
+          next.delete(k)
+        } else {
+          next.set(k, v)
+        }
+      }
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
 
   const tmdbType = filter === 'movie' || filter === 'tv' ? filter : undefined
 
@@ -75,13 +95,13 @@ export default function SearchPage() {
   return (
     <div>
       <h2 className="text-2xl font-bold text-white mb-6">Search</h2>
-      <SearchBar value={query} onChange={(v) => { setQuery(v); setPage(1) }} />
+      <SearchBar value={query} onChange={(v) => { updateParams({ q: v, page: null }) }} />
 
       <div className="flex gap-2 mt-4">
         {FILTER_OPTIONS.map((opt) => (
           <button
             key={opt.value}
-            onClick={() => { setFilter(opt.value); setPage(1) }}
+            onClick={() => { updateParams({ filter: opt.value, page: null }) }}
             className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
               filter === opt.value
                 ? 'bg-blue-600 text-white'
@@ -106,7 +126,7 @@ export default function SearchPage() {
             {data.total_pages > 1 && (
               <div className="flex justify-center gap-4 mt-8">
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  onClick={() => updateParams({ page: String(Math.max(1, page - 1)) })}
                   disabled={page <= 1}
                   className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded text-sm text-white"
                 >
@@ -116,7 +136,7 @@ export default function SearchPage() {
                   Page {page} of {data.total_pages}
                 </span>
                 <button
-                  onClick={() => setPage((p) => p + 1)}
+                  onClick={() => updateParams({ page: String(page + 1) })}
                   disabled={page >= data.total_pages}
                   className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded text-sm text-white"
                 >
