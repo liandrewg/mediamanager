@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     ngrok_authtoken: str = ""
     ngrok_domain: str = ""
+    request_sla_days: int = 7
 
     @property
     def cors_origin_list(self) -> list[str]:

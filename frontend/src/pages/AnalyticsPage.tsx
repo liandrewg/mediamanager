@@ -10,12 +10,18 @@ interface AnalyticsData {
   avg_lead_time_days: number | null
   median_lead_time_days: number | null
   p90_lead_time_days: number | null
+  sla_days: number
+  fulfilled_within_sla_count: number
+  fulfilled_outside_sla_count: number
+  fulfilled_within_sla_rate: number
   open_count: number
   pending_count: number
   approved_count: number
   denied_count: number
   escalated_count: number
   oldest_open_days: number
+  open_breaching_sla: number
+  open_due_soon: number
   top_requesters: { username: string; count: number }[]
   by_media_type: { media_type: string; total: number; fulfilled: number }[]
   monthly_volume: { month: string; submitted: number; fulfilled: number }[]
@@ -250,6 +256,35 @@ export default function AnalyticsPage() {
             label="P90 Lead Time"
             value={data.p90_lead_time_days !== null ? `${data.p90_lead_time_days} days` : '—'}
             sub="90th percentile"
+          />
+        </div>
+      </section>
+
+      {/* ── SLA Watch ── */}
+      <section>
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">
+          SLA Watch
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <KpiCard
+            label="SLA Target"
+            value={`${data.sla_days} days`}
+            sub="request created → fulfilled"
+          />
+          <KpiCard
+            label="Fulfilled Within SLA"
+            value={`${data.fulfilled_within_sla_rate}%`}
+            sub={`${data.fulfilled_within_sla_count} within, ${data.fulfilled_outside_sla_count} outside`}
+          />
+          <KpiCard
+            label="Open Breaching SLA"
+            value={data.open_breaching_sla}
+            sub={`open > ${data.sla_days} days`}
+          />
+          <KpiCard
+            label="Open Due Soon"
+            value={data.open_due_soon}
+            sub="0-2 days left before SLA"
           />
         </div>
       </section>

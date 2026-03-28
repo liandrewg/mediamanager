@@ -23,18 +23,18 @@ def _parse_dt(value) -> datetime | None:
     return None
 
 
-def get_analytics(conn: sqlite3.Connection) -> dict:
+def get_analytics(conn: sqlite3.Connection, sla_days: int = 7) -> dict:
     # Ensure rows are accessible by column name
     original_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
 
     try:
-        return _compute_analytics(conn)
+        return _compute_analytics(conn, sla_days=max(int(sla_days or 7), 1))
     finally:
         conn.row_factory = original_factory
 
 
-def _compute_analytics(conn: sqlite3.Connection) -> dict:
+def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     # --- Summary KPIs ---
     total_requests_all_time = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
     fulfilled_all_time = conn.execute(
@@ -78,6 +78,14 @@ def _compute_analytics(conn: sqlite3.Connection) -> dict:
         else:
             p90_lead_time_days = round(max(lead_times), 1)
 
+    fulfilled_within_sla_count = sum(1 for value in lead_times if value <= sla_days)
+    fulfilled_outside_sla_count = max(len(lead_times) - fulfilled_within_sla_count, 0)
+    fulfilled_within_sla_rate = (
+        round(fulfilled_within_sla_count / len(lead_times) * 100, 1)
+        if lead_times
+        else 0.0
+    )
+
     # --- Backlog pressure ---
     open_count = conn.execute(
         "SELECT COUNT(*) FROM requests WHERE status IN ('pending', 'approved')"
@@ -106,6 +114,8 @@ def _compute_analytics(conn: sqlite3.Connection) -> dict:
         if dt:
             open_ages.append(max((now - dt).days, 0))
     oldest_open_days = max(open_ages) if open_ages else 0
+    open_breaching_sla = sum(1 for age in open_ages if age > sla_days)
+    open_due_soon = sum(1 for age in open_ages if max(sla_days - age, 0) <= 2 and age <= sla_days)
 
     # --- Top requesters (top 5 by total requests ever as original requester) ---
     top_requester_rows = conn.execute(
@@ -182,12 +192,18 @@ def _compute_analytics(conn: sqlite3.Connection) -> dict:
         "avg_lead_time_days": avg_lead_time_days,
         "median_lead_time_days": median_lead_time_days,
         "p90_lead_time_days": p90_lead_time_days,
+        "sla_days": sla_days,
+        "fulfilled_within_sla_count": fulfilled_within_sla_count,
+        "fulfilled_outside_sla_count": fulfilled_outside_sla_count,
+        "fulfilled_within_sla_rate": fulfilled_within_sla_rate,
         "open_count": open_count,
         "pending_count": pending_count,
         "approved_count": approved_count,
         "denied_count": denied_count,
         "escalated_count": escalated_count,
         "oldest_open_days": oldest_open_days,
+        "open_breaching_sla": open_breaching_sla,
+        "open_due_soon": open_due_soon,
         "top_requesters": top_requesters,
         "by_media_type": by_media_type,
         "monthly_volume": monthly_volume,

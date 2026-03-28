@@ -284,8 +284,10 @@ async def get_analytics(
     admin: dict = Depends(require_admin),
     db=Depends(get_db),
 ):
+    from app.config import settings
     from app.services.analytics_service import get_analytics as _get_analytics
-    return _get_analytics(db)
+
+    return _get_analytics(db, sla_days=settings.request_sla_days)
 
 
 @router.post("/jellyfin/scan")

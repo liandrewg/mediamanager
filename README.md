@@ -75,6 +75,7 @@ All backend config is via environment variables in `backend/.env`:
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed origins |
 | `NGROK_AUTHTOKEN` | *(optional)* | ngrok auth token for remote access |
 | `NGROK_DOMAIN` | *(optional)* | Custom ngrok domain |
+| `REQUEST_SLA_DAYS` | `7` | SLA target (days) used in analytics compliance + breach tracking |
 
 ## Tech Stack
 
