@@ -1,3 +1,4 @@
+import math
 import sqlite3
 import statistics
 from datetime import datetime, timezone
@@ -21,6 +22,24 @@ def _parse_dt(value) -> datetime | None:
         except (ValueError, TypeError):
             continue
     return None
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+
+    sorted_vals = sorted(values)
+    rank = (len(sorted_vals) - 1) * percentile
+    lower_idx = math.floor(rank)
+    upper_idx = math.ceil(rank)
+
+    if lower_idx == upper_idx:
+        return sorted_vals[lower_idx]
+
+    weight = rank - lower_idx
+    return sorted_vals[lower_idx] + (sorted_vals[upper_idx] - sorted_vals[lower_idx]) * weight
 
 
 def get_analytics(conn: sqlite3.Connection, sla_days: int = 7) -> dict:
@@ -86,6 +105,17 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         else 0.0
     )
 
+    # --- SLA recommendation (answers: what should our household target be?) ---
+    recommended_sla_days: int | None = None
+    recommended_sla_within_rate: float | None = None
+    if lead_times:
+        p75 = _percentile(lead_times, 0.75)
+        if p75 is not None:
+            # Use p75 as a practical target that keeps expectations realistic
+            recommended_sla_days = max(1, math.ceil(p75))
+            within_recommended = sum(1 for value in lead_times if value <= recommended_sla_days)
+            recommended_sla_within_rate = round(within_recommended / len(lead_times) * 100, 1)
+
     # --- Backlog pressure ---
     open_count = conn.execute(
         "SELECT COUNT(*) FROM requests WHERE status IN ('pending', 'approved')"
@@ -116,6 +146,11 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     oldest_open_days = max(open_ages) if open_ages else 0
     open_breaching_sla = sum(1 for age in open_ages if age > sla_days)
     open_due_soon = sum(1 for age in open_ages if max(sla_days - age, 0) <= 2 and age <= sla_days)
+    open_breaching_recommended_sla = (
+        sum(1 for age in open_ages if age > recommended_sla_days)
+        if recommended_sla_days is not None
+        else None
+    )
 
     # --- Top requesters (top 5 by total requests ever as original requester) ---
     top_requester_rows = conn.execute(
@@ -196,6 +231,9 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         "fulfilled_within_sla_count": fulfilled_within_sla_count,
         "fulfilled_outside_sla_count": fulfilled_outside_sla_count,
         "fulfilled_within_sla_rate": fulfilled_within_sla_rate,
+        "recommended_sla_days": recommended_sla_days,
+        "recommended_sla_within_rate": recommended_sla_within_rate,
+        "recommended_sla_sample_size": len(lead_times),
         "open_count": open_count,
         "pending_count": pending_count,
         "approved_count": approved_count,
@@ -203,6 +241,7 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         "escalated_count": escalated_count,
         "oldest_open_days": oldest_open_days,
         "open_breaching_sla": open_breaching_sla,
+        "open_breaching_recommended_sla": open_breaching_recommended_sla,
         "open_due_soon": open_due_soon,
         "top_requesters": top_requesters,
         "by_media_type": by_media_type,

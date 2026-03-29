@@ -14,6 +14,9 @@ interface AnalyticsData {
   fulfilled_within_sla_count: number
   fulfilled_outside_sla_count: number
   fulfilled_within_sla_rate: number
+  recommended_sla_days: number | null
+  recommended_sla_within_rate: number | null
+  recommended_sla_sample_size: number
   open_count: number
   pending_count: number
   approved_count: number
@@ -21,6 +24,7 @@ interface AnalyticsData {
   escalated_count: number
   oldest_open_days: number
   open_breaching_sla: number
+  open_breaching_recommended_sla: number | null
   open_due_soon: number
   top_requesters: { username: string; count: number }[]
   by_media_type: { media_type: string; total: number; fulfilled: number }[]
@@ -265,7 +269,7 @@ export default function AnalyticsPage() {
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">
           SLA Watch
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <KpiCard
             label="SLA Target"
             value={`${data.sla_days} days`}
@@ -277,6 +281,15 @@ export default function AnalyticsPage() {
             sub={`${data.fulfilled_within_sla_count} within, ${data.fulfilled_outside_sla_count} outside`}
           />
           <KpiCard
+            label="Recommended SLA"
+            value={data.recommended_sla_days !== null ? `${data.recommended_sla_days} days` : '—'}
+            sub={
+              data.recommended_sla_days !== null && data.recommended_sla_within_rate !== null
+                ? `${data.recommended_sla_within_rate}% historical hit rate (${data.recommended_sla_sample_size} fulfilled)`
+                : 'Needs fulfilled request history'
+            }
+          />
+          <KpiCard
             label="Open Breaching SLA"
             value={data.open_breaching_sla}
             sub={`open > ${data.sla_days} days`}
@@ -284,7 +297,11 @@ export default function AnalyticsPage() {
           <KpiCard
             label="Open Due Soon"
             value={data.open_due_soon}
-            sub="0-2 days left before SLA"
+            sub={
+              data.recommended_sla_days !== null && data.open_breaching_recommended_sla !== null
+                ? `recommended breach now: ${data.open_breaching_recommended_sla}`
+                : '0-2 days left before SLA'
+            }
           />
         </div>
       </section>

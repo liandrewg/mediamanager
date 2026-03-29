@@ -93,6 +93,14 @@ class AnalyticsSlaTests(unittest.TestCase):
         self.assertEqual(analytics["fulfilled_within_sla_rate"], 50.0)
         self.assertGreaterEqual(analytics["open_breaching_sla"], 1)
 
+    def test_recommended_sla_is_inferred_from_fulfillment_history(self):
+        analytics = get_analytics(self.conn, sla_days=7)
+
+        self.assertEqual(analytics["recommended_sla_days"], 8)
+        self.assertEqual(analytics["recommended_sla_within_rate"], 50.0)
+        self.assertEqual(analytics["recommended_sla_sample_size"], 2)
+        self.assertIsNotNone(analytics["open_breaching_recommended_sla"])
+
 
 if __name__ == "__main__":
     unittest.main()
