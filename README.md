@@ -1,6 +1,6 @@
 # Media Manager
 
-A self-hosted web application for managing media requests against a Jellyfin server. Users browse and search for movies/TV shows via TMDB, submit requests, and admins manage the request pipeline, including duplicate-request consolidation with merged supporter demand.
+A self-hosted web application for managing media requests against a Jellyfin server. Users browse and search for movies/TV shows via TMDB, submit requests, and admins manage the request pipeline, including duplicate-request consolidation with merged supporter demand and an SLA worklist for proactive queue enforcement.
 
 ## Prerequisites
 
@@ -100,3 +100,13 @@ A cron-based health check script is included to keep services alive:
 ```
 */10 * * * * /path/to/mediamanager/scripts/healthcheck.sh
 ```
+
+
+## SLA Enforcement Workflow
+
+Admins can use the **SLA** tab in the Admin panel to:
+- Configure household SLA policy (`target_days`, warning window)
+- See an actionable SLA worklist grouped by `breached`, `due_soon`, and `on_track`
+- Bulk-escalate selected requests with a reusable escalation note (writes history, comments, and requester notifications)
+
+This turns SLA from passive analytics into an operational triage workflow.

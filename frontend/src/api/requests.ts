@@ -184,3 +184,50 @@ export async function postComment(requestId: number, body: string): Promise<Comm
 export async function deleteComment(requestId: number, commentId: number): Promise<void> {
   await client.delete(`/requests/${requestId}/comments/${commentId}`)
 }
+
+
+export interface SlaPolicy {
+  target_days: number
+  warning_days: number
+  updated_at?: string | null
+}
+
+export interface SlaWorklistResponse {
+  policy: SlaPolicy
+  summary: {
+    breached: number
+    due_soon: number
+    on_track: number
+    total_open: number
+  }
+  state: 'all' | 'breached' | 'due_soon' | 'on_track'
+  items: (RequestRecord & {
+    sla_target_days: number
+    sla_warning_days: number
+    days_until_breach: number
+    sla_state: 'breached' | 'due_soon' | 'on_track'
+  })[]
+}
+
+export async function getSlaPolicy(): Promise<SlaPolicy> {
+  const { data } = await client.get('/admin/sla-policy')
+  return data
+}
+
+export async function updateSlaPolicy(target_days: number, warning_days: number): Promise<SlaPolicy> {
+  const { data } = await client.patch('/admin/sla-policy', { target_days, warning_days })
+  return data
+}
+
+export async function getSlaWorklist(state: 'all' | 'breached' | 'due_soon' | 'on_track' = 'all'): Promise<SlaWorklistResponse> {
+  const { data } = await client.get('/admin/sla-worklist', { params: { state, limit: 500 } })
+  return data
+}
+
+export async function bulkEscalateSlaRequests(requestIds: number[], note?: string): Promise<BulkStatusResult> {
+  const { data } = await client.post('/admin/sla-worklist/escalate', {
+    request_ids: requestIds,
+    note,
+  })
+  return data
+}

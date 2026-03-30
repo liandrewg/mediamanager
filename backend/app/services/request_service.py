@@ -16,6 +16,9 @@ PENDING_REMINDER_MIN_AGE_DAYS = 3
 PENDING_REMINDER_MARKER = "[AUTO-PENDING-REMINDER]"
 DENIED_AUTO_CLOSE_MIN_AGE_DAYS = 14
 DENIED_AUTO_CLOSE_MARKER = "[AUTO-CLOSED-DENIED]"
+SLA_ESCALATION_MARKER = "[SLA-ESCALATION]"
+
+DEFAULT_SLA_WARNING_DAYS = 2
 
 
 def _parse_request_datetime(value: str | None) -> datetime:
@@ -162,6 +165,187 @@ def _add_system_comment(
         )
     except sqlite3.OperationalError:
         return
+
+
+def get_sla_policy(conn: sqlite3.Connection) -> dict:
+    default_target = max(int(getattr(settings, "request_sla_days", 7) or 7), 1)
+    default_warning = min(DEFAULT_SLA_WARNING_DAYS, max(default_target - 1, 0))
+    try:
+        row = conn.execute(
+            """
+            SELECT target_days, warning_days, updated_at
+            FROM sla_policy
+            WHERE id = 1
+            """
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+
+    if not row:
+        return {
+            "target_days": default_target,
+            "warning_days": default_warning,
+            "updated_at": None,
+        }
+
+    target_days = max(int(row["target_days"] or default_target), 1)
+    warning_days = min(max(int(row["warning_days"] or 0), 0), max(target_days - 1, 0))
+    return {
+        "target_days": target_days,
+        "warning_days": warning_days,
+        "updated_at": row["updated_at"],
+    }
+
+
+def update_sla_policy(
+    conn: sqlite3.Connection,
+    target_days: int,
+    warning_days: int,
+) -> dict:
+    target_days = max(int(target_days or 1), 1)
+    warning_days = min(max(int(warning_days or 0), 0), max(target_days - 1, 0))
+    now = datetime.utcnow().isoformat()
+
+    try:
+        conn.execute(
+            """
+            INSERT INTO sla_policy (id, target_days, warning_days, updated_at)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                target_days = excluded.target_days,
+                warning_days = excluded.warning_days,
+                updated_at = excluded.updated_at
+            """,
+            (target_days, warning_days, now),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        conn.rollback()
+
+    return get_sla_policy(conn)
+
+
+def get_sla_worklist(
+    conn: sqlite3.Connection,
+    state: str = "all",
+    limit: int = 200,
+) -> dict:
+    policy = get_sla_policy(conn)
+    target_days = policy["target_days"]
+    warning_days = policy["warning_days"]
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM requests
+        WHERE status IN ('pending', 'approved')
+        ORDER BY created_at ASC
+        """
+    ).fetchall()
+
+    items: list[dict] = []
+    for row in rows:
+        serialized = _serialize_request(conn, row)
+        days_open = serialized.get("days_open", 0)
+        days_until_breach = target_days - days_open
+        if days_until_breach < 0:
+            sla_state = "breached"
+        elif days_until_breach <= warning_days:
+            sla_state = "due_soon"
+        else:
+            sla_state = "on_track"
+
+        serialized["sla_target_days"] = target_days
+        serialized["sla_warning_days"] = warning_days
+        serialized["days_until_breach"] = days_until_breach
+        serialized["sla_state"] = sla_state
+        items.append(serialized)
+
+    summary = {
+        "breached": sum(1 for item in items if item["sla_state"] == "breached"),
+        "due_soon": sum(1 for item in items if item["sla_state"] == "due_soon"),
+        "on_track": sum(1 for item in items if item["sla_state"] == "on_track"),
+        "total_open": len(items),
+    }
+
+    if state != "all":
+        items = [item for item in items if item["sla_state"] == state]
+
+    items.sort(
+        key=lambda item: (
+            0 if item["sla_state"] == "breached" else (1 if item["sla_state"] == "due_soon" else 2),
+            item["days_until_breach"],
+            -item["supporter_count"],
+            -item["days_open"],
+        )
+    )
+
+    bounded_limit = min(max(int(limit or 1), 1), 1000)
+    return {
+        "policy": policy,
+        "summary": summary,
+        "state": state,
+        "items": items[:bounded_limit],
+    }
+
+
+def bulk_escalate_sla_breaches(
+    conn: sqlite3.Connection,
+    request_ids: list[int],
+    changed_by: str,
+    note: str | None = None,
+) -> dict:
+    if not request_ids:
+        return {"updated": [], "missing": []}
+
+    now = datetime.utcnow().isoformat()
+    actor_name = _resolve_actor_name(conn, changed_by)
+    policy = get_sla_policy(conn)
+
+    updated: list[dict] = []
+    missing: list[int] = []
+    for request_id in request_ids:
+        row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+        if not row:
+            missing.append(request_id)
+            continue
+
+        req = dict(row)
+        if req["status"] not in OPEN_REQUEST_STATUSES:
+            continue
+
+        days_open = max((datetime.now(timezone.utc) - _parse_request_datetime(req.get("created_at"))).days, 0)
+        marker_note = (
+            f"{SLA_ESCALATION_MARKER} Escalated after {days_open} days open "
+            f"(SLA target: {policy['target_days']}d)."
+        )
+        full_note = marker_note if not note else f"{marker_note} {note.strip()}"
+        merged_note = _append_admin_note(req.get("admin_note"), full_note)
+
+        conn.execute(
+            "UPDATE requests SET admin_note = ?, updated_at = ? WHERE id = ?",
+            (merged_note, now, request_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO request_history (request_id, old_status, new_status, changed_by, note)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (request_id, req["status"], req["status"], changed_by, full_note),
+        )
+        _add_system_comment(conn, request_id, full_note, now)
+        _create_request_notifications(
+            conn,
+            request_id,
+            event_type="sla_escalated",
+            message=f"Request received SLA escalation attention from {actor_name}.",
+            actor_user_id=changed_by,
+            actor_name=actor_name,
+        )
+        updated.append(get_request_by_id(conn, request_id))
+
+    conn.commit()
+    return {"updated": updated, "missing": missing}
 
 
 def _get_active_duplicate_candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:

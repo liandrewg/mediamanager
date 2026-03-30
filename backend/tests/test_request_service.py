@@ -839,3 +839,164 @@ class LifecycleRuleAutomationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlaPolicyAndWorklistTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE request_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                body TEXT NOT NULL,
+                created_at TEXT
+            );
+
+            CREATE TABLE request_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                actor_user_id TEXT,
+                actor_name TEXT,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
+            );
+
+            CREATE TABLE user_roles (
+                user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                role TEXT NOT NULL
+            );
+
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                target_days INTEGER NOT NULL,
+                warning_days INTEGER NOT NULL,
+                updated_at TEXT
+            );
+            """
+        )
+
+        self.conn.execute("INSERT INTO sla_policy (id, target_days, warning_days, updated_at) VALUES (1, 7, 2, '2026-03-01T00:00:00+00:00')")
+        self.conn.execute("INSERT INTO user_roles (user_id, username, role) VALUES ('admin-1', 'Casey Admin', 'admin')")
+
+        fixtures = [
+            ("u1", "alice", 101, "movie", "Old Breach", "pending", "2026-03-01T00:00:00+00:00"),
+            ("u2", "bob", 202, "tv", "Due Soon", "approved", "2026-03-09T00:00:00+00:00"),
+            ("u3", "cara", 303, "book", "On Track", "pending", "2026-03-14T00:00:00+00:00"),
+        ]
+        for user_id, username, tmdb_id, media_type, title, status, created_at in fixtures:
+            cur = self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, username, tmdb_id, media_type, title, status, created_at, created_at),
+            )
+            req_id = cur.lastrowid
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+                (req_id, user_id, username, created_at),
+            )
+
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_sla_worklist_classifies_breached_due_soon_and_on_track(self):
+        frozen_now = datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc)
+        with patch.object(request_service, "datetime") as mock_datetime:
+            mock_datetime.now.return_value = frozen_now
+            mock_datetime.utcnow.return_value = datetime(2026, 3, 16, 0, 0)
+            mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+            mock_datetime.strptime.side_effect = datetime.strptime
+
+            worklist = request_service.get_sla_worklist(self.conn)
+
+        self.assertEqual(worklist["summary"]["total_open"], 3)
+        self.assertEqual(worklist["summary"]["breached"], 1)
+        self.assertEqual(worklist["summary"]["due_soon"], 1)
+        self.assertEqual(worklist["summary"]["on_track"], 1)
+        states = {item["title"]: item["sla_state"] for item in worklist["items"]}
+        self.assertEqual(states["Old Breach"], "breached")
+        self.assertEqual(states["Due Soon"], "due_soon")
+        self.assertEqual(states["On Track"], "on_track")
+
+    def test_bulk_escalate_sla_breaches_updates_notes_history_comments(self):
+        frozen_now = datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc)
+        with patch.object(request_service, "datetime") as mock_datetime:
+            mock_datetime.now.return_value = frozen_now
+            mock_datetime.utcnow.return_value = datetime(2026, 3, 16, 0, 0)
+            mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+            mock_datetime.strptime.side_effect = datetime.strptime
+
+            result = request_service.bulk_escalate_sla_breaches(
+                self.conn,
+                request_ids=[1, 2],
+                changed_by="admin-1",
+                note="Prioritize this for family watch night",
+            )
+
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(len(result["updated"]), 2)
+
+        note_row = self.conn.execute("SELECT admin_note FROM requests WHERE id = 1").fetchone()
+        self.assertIn("[SLA-ESCALATION]", note_row["admin_note"])
+        self.assertIn("Prioritize this", note_row["admin_note"])
+
+        history_count = self.conn.execute("SELECT COUNT(*) FROM request_history").fetchone()[0]
+        comment_count = self.conn.execute("SELECT COUNT(*) FROM request_comments").fetchone()[0]
+        notification_count = self.conn.execute("SELECT COUNT(*) FROM request_notifications WHERE type = 'sla_escalated'").fetchone()[0]
+        self.assertEqual(history_count, 2)
+        self.assertEqual(comment_count, 2)
+        self.assertEqual(notification_count, 2)
+
+    def test_update_sla_policy_persists_and_normalizes_warning_window(self):
+        updated = request_service.update_sla_policy(self.conn, target_days=5, warning_days=12)
+        self.assertEqual(updated["target_days"], 5)
+        self.assertEqual(updated["warning_days"], 4)
+
+        row = self.conn.execute("SELECT target_days, warning_days FROM sla_policy WHERE id = 1").fetchone()
+        self.assertEqual(row["target_days"], 5)
+        self.assertEqual(row["warning_days"], 4)

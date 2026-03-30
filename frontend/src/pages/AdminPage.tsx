@@ -11,6 +11,10 @@ import {
   triggerJellyfinScan,
   getDuplicateRequestGroups,
   mergeDuplicateRequests,
+  getSlaPolicy,
+  updateSlaPolicy,
+  getSlaWorklist,
+  bulkEscalateSlaRequests,
   type DuplicateGroup,
 } from '../api/requests'
 import { getAllBacklog, updateBacklogItem, deleteBacklogItem, getBacklogStats } from '../api/backlog'
@@ -86,7 +90,7 @@ const PRIORITY_STYLES: Record<string, string> = {
   critical: 'bg-red-600/30 text-red-300',
 }
 
-type Tab = 'requests' | 'duplicates' | 'backlog' | 'users' | 'tunnel' | 'health'
+type Tab = 'requests' | 'duplicates' | 'sla' | 'backlog' | 'users' | 'tunnel' | 'health'
 type DuplicateSelectionState = Record<string, { targetId: number; sourceIds: number[] }>
 
 export default function AdminPage() {
@@ -100,6 +104,11 @@ export default function AdminPage() {
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
   const [selectedRequestIds, setSelectedRequestIds] = useState<Set<number>>(new Set())
   const [duplicateSelections, setDuplicateSelections] = useState<DuplicateSelectionState>({})
+  const [slaStateFilter, setSlaStateFilter] = useState<'all' | 'breached' | 'due_soon' | 'on_track'>('all')
+  const [slaTargetDays, setSlaTargetDays] = useState(7)
+  const [slaWarningDays, setSlaWarningDays] = useState(2)
+  const [slaSelectedIds, setSlaSelectedIds] = useState<Set<number>>(new Set())
+  const [slaEscalationNote, setSlaEscalationNote] = useState('')
 
   const toggleComments = (id: number) => {
     setExpandedComments((prev) => {
@@ -127,6 +136,18 @@ export default function AdminPage() {
     queryKey: ['duplicateRequestGroups'],
     queryFn: getDuplicateRequestGroups,
     enabled: tab === 'duplicates',
+  })
+
+  const { data: slaPolicy } = useQuery({
+    queryKey: ['slaPolicy'],
+    queryFn: getSlaPolicy,
+    enabled: tab === 'sla',
+  })
+
+  const { data: slaWorklist, isLoading: slaLoading } = useQuery({
+    queryKey: ['slaWorklist', slaStateFilter],
+    queryFn: () => getSlaWorklist(slaStateFilter),
+    enabled: tab === 'sla',
   })
 
   const { data: users, isLoading: usersLoading } = useQuery({
@@ -211,6 +232,27 @@ export default function AdminPage() {
     },
   })
 
+  const saveSlaPolicyMutation = useMutation({
+    mutationFn: ({ targetDays, warningDays }: { targetDays: number; warningDays: number }) =>
+      updateSlaPolicy(targetDays, warningDays),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['slaPolicy'] })
+      queryClient.invalidateQueries({ queryKey: ['slaWorklist'] })
+      queryClient.invalidateQueries({ queryKey: ['adminStats'] })
+    },
+  })
+
+  const escalateSlaMutation = useMutation({
+    mutationFn: ({ requestIds, note }: { requestIds: number[]; note?: string }) =>
+      bulkEscalateSlaRequests(requestIds, note),
+    onSuccess: () => {
+      setSlaSelectedIds(new Set())
+      setSlaEscalationNote('')
+      queryClient.invalidateQueries({ queryKey: ['slaWorklist'] })
+      queryClient.invalidateQueries({ queryKey: ['adminRequests'] })
+    },
+  })
+
   const roleMutation = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
       updateUserRole(userId, role),
@@ -284,6 +326,42 @@ export default function AdminPage() {
       return next
     })
   }, [duplicateGroups])
+
+  useEffect(() => {
+    if (!slaPolicy) return
+    setSlaTargetDays(slaPolicy.target_days)
+    setSlaWarningDays(slaPolicy.warning_days)
+  }, [slaPolicy])
+
+  const toggleSlaSelection = (requestId: number) => {
+    setSlaSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(requestId)) next.delete(requestId)
+      else next.add(requestId)
+      return next
+    })
+  }
+
+  const toggleSelectAllSla = () => {
+    const ids = (slaWorklist?.items || []).map((item: any) => item.id)
+    const allSelected = ids.length > 0 && ids.every((id: number) => slaSelectedIds.has(id))
+    setSlaSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allSelected) ids.forEach((id: number) => next.delete(id))
+      else ids.forEach((id: number) => next.add(id))
+      return next
+    })
+  }
+
+  const saveSlaPolicy = () => {
+    if (slaWarningDays >= slaTargetDays) return
+    saveSlaPolicyMutation.mutate({ targetDays: slaTargetDays, warningDays: slaWarningDays })
+  }
+
+  const escalateSelectedSla = () => {
+    if (slaSelectedIds.size === 0) return
+    escalateSlaMutation.mutate({ requestIds: Array.from(slaSelectedIds), note: slaEscalationNote || undefined })
+  }
 
   const getAgeBadgeClass = (daysOpen: number) => {
     if (daysOpen >= 14) return 'bg-red-600/20 text-red-300 border border-red-500/30'
@@ -458,6 +536,16 @@ export default function AdminPage() {
           }`}
         >
           Duplicates
+        </button>
+        <button
+          onClick={() => setTab('sla')}
+          className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+            tab === 'sla'
+              ? 'border-blue-500 text-blue-400'
+              : 'border-transparent text-slate-400 hover:text-white'
+          }`}
+        >
+          SLA
         </button>
         <button
           onClick={() => setTab('backlog')}
@@ -847,6 +935,92 @@ export default function AdminPage() {
               {(mergeDuplicatesMutation.error as any)?.response?.data?.detail || 'Failed to merge duplicate requests'}
             </p>
           )}
+        </div>
+      )}
+
+      {/* ========== SLA TAB ========== */}
+      {tab === 'sla' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatsCard label="Open Requests" value={slaWorklist?.summary.total_open || 0} />
+            <StatsCard label="Breached" value={slaWorklist?.summary.breached || 0} />
+            <StatsCard label="Due Soon" value={slaWorklist?.summary.due_soon || 0} />
+            <StatsCard label="On Track" value={slaWorklist?.summary.on_track || 0} />
+          </div>
+
+          <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
+            <h3 className="text-white font-semibold">SLA Policy</h3>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-sm text-slate-300">Target days
+                <input type="number" min={1} max={90} value={slaTargetDays} onChange={(e) => setSlaTargetDays(Number(e.target.value))}
+                  className="mt-1 w-28 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-white" />
+              </label>
+              <label className="text-sm text-slate-300">Warn when ≤ days to breach
+                <input type="number" min={0} max={30} value={slaWarningDays} onChange={(e) => setSlaWarningDays(Number(e.target.value))}
+                  className="mt-1 w-28 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-white" />
+              </label>
+              <button onClick={saveSlaPolicy} disabled={saveSlaPolicyMutation.isPending || slaWarningDays >= slaTargetDays}
+                className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-sm text-white font-medium">
+                {saveSlaPolicyMutation.isPending ? 'Saving...' : 'Save Policy'}
+              </button>
+            </div>
+            {slaWarningDays >= slaTargetDays && <p className="text-xs text-red-400">Warning window must be less than target days.</p>}
+          </div>
+
+          <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={slaStateFilter} onChange={(e) => setSlaStateFilter(e.target.value as any)} className="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-300 border border-slate-700">
+                <option value="all">All states</option>
+                <option value="breached">Breached</option>
+                <option value="due_soon">Due soon</option>
+                <option value="on_track">On track</option>
+              </select>
+              <button onClick={toggleSelectAllSla} className="text-xs text-blue-400 hover:text-blue-300">Toggle all</button>
+              <span className="text-xs text-slate-500">{slaSelectedIds.size} selected</span>
+            </div>
+
+            <textarea value={slaEscalationNote} onChange={(e) => setSlaEscalationNote(e.target.value)} placeholder="Optional escalation note for selected requests"
+              rows={2} className="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-white" />
+            <button onClick={escalateSelectedSla} disabled={slaSelectedIds.size === 0 || escalateSlaMutation.isPending}
+              className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-sm text-white font-medium">
+              {escalateSlaMutation.isPending ? 'Escalating...' : 'Escalate selected'}
+            </button>
+
+            {slaLoading ? <p className="text-slate-400 text-sm">Loading SLA worklist...</p> : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px]">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400 text-sm">
+                      <th className="text-left px-3 py-2"></th>
+                      <th className="text-left px-3 py-2">Title</th>
+                      <th className="text-left px-3 py-2">Status</th>
+                      <th className="text-left px-3 py-2">Age</th>
+                      <th className="text-left px-3 py-2">Supporters</th>
+                      <th className="text-left px-3 py-2">Days to breach</th>
+                      <th className="text-left px-3 py-2">SLA state</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(slaWorklist?.items || []).map((item: any) => (
+                      <tr key={item.id} className="border-b border-slate-800">
+                        <td className="px-3 py-2"><input type="checkbox" checked={slaSelectedIds.has(item.id)} onChange={() => toggleSlaSelection(item.id)} /></td>
+                        <td className="px-3 py-2 text-white text-sm">{item.title}</td>
+                        <td className="px-3 py-2 text-sm"><RequestBadge status={item.status} /></td>
+                        <td className="px-3 py-2 text-slate-300 text-sm">{item.days_open}d</td>
+                        <td className="px-3 py-2 text-slate-300 text-sm">{item.supporter_count}</td>
+                        <td className="px-3 py-2 text-slate-300 text-sm">{item.days_until_breach}</td>
+                        <td className="px-3 py-2 text-sm">
+                          <span className={`px-2 py-0.5 rounded-full text-xs ${item.sla_state === 'breached' ? 'bg-red-600/30 text-red-300' : item.sla_state === 'due_soon' ? 'bg-amber-600/30 text-amber-300' : 'bg-green-600/30 text-green-300'}`}>
+                            {item.sla_state}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

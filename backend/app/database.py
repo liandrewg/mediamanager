@@ -94,6 +94,13 @@ def init_db():
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS sla_policy (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            target_days INTEGER NOT NULL DEFAULT 7 CHECK (target_days >= 1),
+            warning_days INTEGER NOT NULL DEFAULT 2 CHECK (warning_days >= 0),
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
     # Migration: add jellyfin_token column to user_roles if missing
@@ -248,7 +255,25 @@ def init_db():
         conn.execute("SELECT jellyfin_item_id FROM requests LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE requests ADD COLUMN jellyfin_item_id TEXT")
-        conn.commit()
+        conn.execute(
+        """
+        INSERT OR IGNORE INTO sla_policy (id, target_days, warning_days)
+        VALUES (1, ?, ?)
+        """,
+        (7, 2),
+    )
+    conn.execute(
+        """
+        UPDATE sla_policy
+        SET warning_days = CASE
+            WHEN warning_days < 0 THEN 0
+            WHEN warning_days >= target_days THEN target_days - 1
+            ELSE warning_days
+        END
+        WHERE id = 1
+        """
+    )
+    conn.commit()
 
     # Migration: add request_comments table
     conn.executescript("""

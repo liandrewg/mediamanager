@@ -123,6 +123,16 @@ class BulkRequestStatusUpdate(BaseModel):
     admin_note: str | None = None
 
 
+class SlaPolicyUpdate(BaseModel):
+    target_days: int = Field(..., ge=1, le=90)
+    warning_days: int = Field(..., ge=0, le=30)
+
+
+class SlaEscalationBulkRequest(BaseModel):
+    request_ids: list[int] = Field(..., min_length=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
 @router.post("/requests/bulk-status")
 async def bulk_update_request_statuses(
     body: BulkRequestStatusUpdate,
@@ -288,6 +298,49 @@ async def get_analytics(
     from app.services.analytics_service import get_analytics as _get_analytics
 
     return _get_analytics(db, sla_days=settings.request_sla_days)
+
+
+@router.get("/sla-policy")
+async def get_sla_policy(
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    return request_service.get_sla_policy(db)
+
+
+@router.patch("/sla-policy")
+async def patch_sla_policy(
+    body: SlaPolicyUpdate,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    if body.warning_days >= body.target_days:
+        raise HTTPException(status_code=400, detail="warning_days must be less than target_days")
+    return request_service.update_sla_policy(db, target_days=body.target_days, warning_days=body.warning_days)
+
+
+@router.get("/sla-worklist")
+async def get_sla_worklist(
+    state: str = Query("all", pattern="^(all|breached|due_soon|on_track)$"),
+    limit: int = Query(200, ge=1, le=1000),
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    return request_service.get_sla_worklist(db, state=state, limit=limit)
+
+
+@router.post("/sla-worklist/escalate")
+async def bulk_escalate_sla_worklist(
+    body: SlaEscalationBulkRequest,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    return request_service.bulk_escalate_sla_breaches(
+        db,
+        request_ids=body.request_ids,
+        changed_by=admin["user_id"],
+        note=body.note,
+    )
 
 
 @router.post("/jellyfin/scan")
