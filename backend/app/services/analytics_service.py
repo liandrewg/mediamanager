@@ -53,6 +53,16 @@ def get_analytics(conn: sqlite3.Connection, sla_days: int = 7) -> dict:
         conn.row_factory = original_factory
 
 
+def get_sla_target_simulation(conn: sqlite3.Connection, target_days: list[int]) -> dict:
+    original_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+
+    try:
+        return _compute_sla_target_simulation(conn, target_days)
+    finally:
+        conn.row_factory = original_factory
+
+
 def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     # --- Summary KPIs ---
     total_requests_all_time = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
@@ -249,4 +259,66 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         "weekly_throughput": weekly_throughput,
         "total_supporters_ever": total_supporters_ever,
         "avg_supporters_per_request": avg_supporters_per_request,
+    }
+
+
+def _compute_sla_target_simulation(conn: sqlite3.Connection, targets: list[int]) -> dict:
+    normalized_targets = sorted({max(int(target), 1) for target in targets if int(target) > 0})
+    if not normalized_targets:
+        normalized_targets = [7]
+
+    history_rows = conn.execute(
+        """
+        SELECT r.created_at AS req_created, rh.created_at AS fulfilled_at
+        FROM request_history rh
+        JOIN requests r ON r.id = rh.request_id
+        WHERE rh.new_status = 'fulfilled'
+        """
+    ).fetchall()
+
+    lead_times: list[float] = []
+    for row in history_rows:
+        req_dt = _parse_dt(row["req_created"])
+        ful_dt = _parse_dt(row["fulfilled_at"])
+        if req_dt and ful_dt and ful_dt >= req_dt:
+            lead_times.append((ful_dt - req_dt).total_seconds() / 86400.0)
+
+    now = datetime.now(timezone.utc)
+    open_rows = conn.execute(
+        "SELECT created_at FROM requests WHERE status IN ('pending', 'approved')"
+    ).fetchall()
+    open_ages: list[int] = []
+    for row in open_rows:
+        dt = _parse_dt(row["created_at"])
+        if dt:
+            open_ages.append(max((now - dt).days, 0))
+
+    scenarios: list[dict] = []
+    for target in normalized_targets:
+        warning_days = min(max(target - 2, 0), max(target - 1, 0))
+        if lead_times:
+            within = sum(1 for value in lead_times if value <= target)
+            hit_rate = round(within / len(lead_times) * 100, 1)
+        else:
+            within = 0
+            hit_rate = None
+
+        breached = sum(1 for age in open_ages if age > target)
+        due_soon = sum(1 for age in open_ages if target - warning_days <= age <= target)
+        scenarios.append(
+            {
+                "target_days": target,
+                "warning_days": warning_days,
+                "historical_hit_rate": hit_rate,
+                "historical_within_count": within,
+                "historical_sample_size": len(lead_times),
+                "open_breaching": breached,
+                "open_due_soon": due_soon,
+            }
+        )
+
+    return {
+        "scenarios": scenarios,
+        "open_sample_size": len(open_ages),
+        "historical_sample_size": len(lead_times),
     }

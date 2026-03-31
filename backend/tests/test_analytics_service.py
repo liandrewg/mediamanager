@@ -1,7 +1,7 @@
 import sqlite3
 import unittest
 
-from app.services.analytics_service import get_analytics
+from app.services.analytics_service import get_analytics, get_sla_target_simulation
 
 
 class AnalyticsSlaTests(unittest.TestCase):
@@ -100,6 +100,17 @@ class AnalyticsSlaTests(unittest.TestCase):
         self.assertEqual(analytics["recommended_sla_within_rate"], 50.0)
         self.assertEqual(analytics["recommended_sla_sample_size"], 2)
         self.assertIsNotNone(analytics["open_breaching_recommended_sla"])
+
+    def test_sla_target_simulation_compares_multiple_targets(self):
+        simulation = get_sla_target_simulation(self.conn, [3, 7, 12])
+
+        self.assertEqual(simulation["historical_sample_size"], 2)
+        self.assertEqual(simulation["open_sample_size"], 1)
+        self.assertEqual([row["target_days"] for row in simulation["scenarios"]], [3, 7, 12])
+
+        seven_day = next(row for row in simulation["scenarios"] if row["target_days"] == 7)
+        self.assertEqual(seven_day["historical_hit_rate"], 50.0)
+        self.assertEqual(seven_day["open_breaching"], 1)
 
 
 if __name__ == "__main__":

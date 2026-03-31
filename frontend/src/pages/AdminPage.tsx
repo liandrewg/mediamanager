@@ -11,11 +11,16 @@ import {
   triggerJellyfinScan,
   getDuplicateRequestGroups,
   mergeDuplicateRequests,
+  getAnalytics,
   getSlaPolicy,
   updateSlaPolicy,
+  applyRecommendedSlaPolicy,
   getSlaWorklist,
   bulkEscalateSlaRequests,
+  simulateSlaPolicy,
+  type AdminAnalytics,
   type DuplicateGroup,
+  type SlaSimulationScenario,
 } from '../api/requests'
 import { getAllBacklog, updateBacklogItem, deleteBacklogItem, getBacklogStats } from '../api/backlog'
 import { getTunnelStatus, startTunnel, stopTunnel } from '../api/tunnel'
@@ -107,8 +112,14 @@ export default function AdminPage() {
   const [slaStateFilter, setSlaStateFilter] = useState<'all' | 'breached' | 'due_soon' | 'on_track'>('all')
   const [slaTargetDays, setSlaTargetDays] = useState(7)
   const [slaWarningDays, setSlaWarningDays] = useState(2)
+  const [slaRecommendedWarningOverride, setSlaRecommendedWarningOverride] = useState('')
+  const [slaRecommendationFeedback, setSlaRecommendationFeedback] = useState<{
+    type: 'success' | 'error'
+    message: string
+  } | null>(null)
   const [slaSelectedIds, setSlaSelectedIds] = useState<Set<number>>(new Set())
   const [slaEscalationNote, setSlaEscalationNote] = useState('')
+  const [slaSimulationTargets, setSlaSimulationTargets] = useState('3,5,7,10,14')
 
   const toggleComments = (id: number) => {
     setExpandedComments((prev) => {
@@ -142,6 +153,27 @@ export default function AdminPage() {
     queryKey: ['slaPolicy'],
     queryFn: getSlaPolicy,
     enabled: tab === 'sla',
+  })
+
+  const { data: slaAnalytics, isLoading: slaAnalyticsLoading } = useQuery<AdminAnalytics>({
+    queryKey: ['admin-analytics'],
+    queryFn: getAnalytics,
+    enabled: tab === 'sla',
+  })
+
+  const parsedSimulationTargets = Array.from(
+    new Set(
+      slaSimulationTargets
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value) && value > 0 && value <= 90)
+    )
+  )
+
+  const { data: slaSimulation, isLoading: slaSimulationLoading } = useQuery({
+    queryKey: ['slaSimulation', parsedSimulationTargets.join(',')],
+    queryFn: () => simulateSlaPolicy(parsedSimulationTargets),
+    enabled: tab === 'sla' && parsedSimulationTargets.length > 0,
   })
 
   const { data: slaWorklist, isLoading: slaLoading } = useQuery({
@@ -238,7 +270,29 @@ export default function AdminPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['slaPolicy'] })
       queryClient.invalidateQueries({ queryKey: ['slaWorklist'] })
+      queryClient.invalidateQueries({ queryKey: ['admin-analytics'] })
       queryClient.invalidateQueries({ queryKey: ['adminStats'] })
+    },
+  })
+
+  const applyRecommendedSlaPolicyMutation = useMutation({
+    mutationFn: ({ warningDaysOverride }: { warningDaysOverride?: number }) =>
+      applyRecommendedSlaPolicy(warningDaysOverride),
+    onSuccess: (policy) => {
+      setSlaRecommendedWarningOverride('')
+      setSlaRecommendationFeedback({
+        type: 'success',
+        message: `Applied recommended SLA: ${policy.target_days} day target, ${policy.warning_days} day warning window.`,
+      })
+      queryClient.invalidateQueries({ queryKey: ['slaPolicy'] })
+      queryClient.invalidateQueries({ queryKey: ['slaWorklist'] })
+      queryClient.invalidateQueries({ queryKey: ['admin-analytics'] })
+    },
+    onError: (error: any) => {
+      setSlaRecommendationFeedback({
+        type: 'error',
+        message: error?.response?.data?.detail || 'Failed to apply recommended SLA policy',
+      })
     },
   })
 
@@ -355,7 +409,43 @@ export default function AdminPage() {
 
   const saveSlaPolicy = () => {
     if (slaWarningDays >= slaTargetDays) return
+    setSlaRecommendationFeedback(null)
     saveSlaPolicyMutation.mutate({ targetDays: slaTargetDays, warningDays: slaWarningDays })
+  }
+
+  const trimmedSlaRecommendedWarningOverride = slaRecommendedWarningOverride.trim()
+  const hasSlaRecommendedWarningOverride = trimmedSlaRecommendedWarningOverride !== ''
+  const parsedSlaRecommendedWarningOverride =
+    hasSlaRecommendedWarningOverride ? Number(trimmedSlaRecommendedWarningOverride) : null
+  const slaRecommendedWarningOverrideIsValid =
+    !hasSlaRecommendedWarningOverride ||
+    (
+      parsedSlaRecommendedWarningOverride !== null &&
+      Number.isInteger(parsedSlaRecommendedWarningOverride) &&
+      parsedSlaRecommendedWarningOverride >= 0
+    )
+  const recommendedSlaDays = slaAnalytics?.recommended_sla_days ?? null
+  const recommendedSlaWithinRate = slaAnalytics?.recommended_sla_within_rate ?? null
+  const recommendedSlaSampleSize = slaAnalytics?.recommended_sla_sample_size ?? 0
+  const defaultRecommendedWarningDays =
+    recommendedSlaDays === null ? null : Math.min(Math.max(recommendedSlaDays - 2, 0), Math.max(recommendedSlaDays - 1, 0))
+
+  const applyRecommendedPolicy = () => {
+    if (recommendedSlaDays === null || !slaRecommendedWarningOverrideIsValid) return
+    setSlaRecommendationFeedback(null)
+    applyRecommendedSlaPolicyMutation.mutate({
+      warningDaysOverride: parsedSlaRecommendedWarningOverride ?? undefined,
+    })
+  }
+
+  const applySimulatedPolicy = (scenario: SlaSimulationScenario) => {
+    setSlaTargetDays(scenario.target_days)
+    setSlaWarningDays(scenario.warning_days)
+    setSlaRecommendationFeedback(null)
+    saveSlaPolicyMutation.mutate({
+      targetDays: scenario.target_days,
+      warningDays: scenario.warning_days,
+    })
   }
 
   const escalateSelectedSla = () => {
@@ -965,6 +1055,129 @@ export default function AdminPage() {
               </button>
             </div>
             {slaWarningDays >= slaTargetDays && <p className="text-xs text-red-400">Warning window must be less than target days.</p>}
+
+            <div className="border-t border-slate-800 pt-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Recommended</p>
+                  {slaAnalyticsLoading ? (
+                    <p className="text-sm text-slate-400">Loading recommendation...</p>
+                  ) : recommendedSlaDays !== null && recommendedSlaWithinRate !== null ? (
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+                      <span className="rounded-full bg-blue-500/15 px-2 py-1 font-medium text-blue-200">
+                        {recommendedSlaDays} day{recommendedSlaDays === 1 ? '' : 's'}
+                      </span>
+                      <span>{recommendedSlaWithinRate}% expected hit rate</span>
+                      <span className="text-slate-500">{recommendedSlaSampleSize} fulfilled sample{recommendedSlaSampleSize === 1 ? '' : 's'}</span>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-400">Needs fulfilled request history before a recommendation is available.</p>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="text-sm text-slate-300">Warning override
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={slaRecommendedWarningOverride}
+                      onChange={(e) => {
+                        setSlaRecommendedWarningOverride(e.target.value)
+                        setSlaRecommendationFeedback(null)
+                      }}
+                      placeholder={defaultRecommendedWarningDays === null ? 'Auto' : String(defaultRecommendedWarningDays)}
+                      className="mt-1 w-32 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-white placeholder:text-slate-500"
+                    />
+                  </label>
+                  <button
+                    onClick={applyRecommendedPolicy}
+                    disabled={
+                      applyRecommendedSlaPolicyMutation.isPending ||
+                      recommendedSlaDays === null ||
+                      !slaRecommendedWarningOverrideIsValid
+                    }
+                    className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-sm text-white font-medium"
+                  >
+                    {applyRecommendedSlaPolicyMutation.isPending ? 'Applying...' : 'Apply Recommended'}
+                  </button>
+                </div>
+              </div>
+
+              {defaultRecommendedWarningDays !== null && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Leave the warning override blank to use {defaultRecommendedWarningDays} day{defaultRecommendedWarningDays === 1 ? '' : 's'} before breach.
+                </p>
+              )}
+              {!slaRecommendedWarningOverrideIsValid && (
+                <p className="mt-2 text-xs text-red-400">Warning override must be a whole number 0 or greater.</p>
+              )}
+              {slaRecommendationFeedback && (
+                <p className={`mt-2 text-sm ${slaRecommendationFeedback.type === 'success' ? 'text-emerald-300' : 'text-red-400'}`}>
+                  {slaRecommendationFeedback.message}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
+            <h3 className="text-white font-semibold">SLA Target Simulator</h3>
+            <p className="text-sm text-slate-400">Compare candidate SLA targets against historical fulfillment hit rate and current queue risk before applying policy.</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-sm text-slate-300">Candidate targets (days)
+                <input
+                  type="text"
+                  value={slaSimulationTargets}
+                  onChange={(e) => setSlaSimulationTargets(e.target.value)}
+                  placeholder="3,5,7,10,14"
+                  className="mt-1 w-56 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-white"
+                />
+              </label>
+              {parsedSimulationTargets.length === 0 && <p className="text-xs text-red-400">Enter one or more comma-separated whole numbers between 1 and 90.</p>}
+            </div>
+
+            {slaSimulationLoading ? (
+              <p className="text-sm text-slate-400">Simulating targets...</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[680px]">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-400 text-sm">
+                      <th className="text-left px-3 py-2">Target</th>
+                      <th className="text-left px-3 py-2">Auto warn</th>
+                      <th className="text-left px-3 py-2">Historical hit rate</th>
+                      <th className="text-left px-3 py-2">Open breaching now</th>
+                      <th className="text-left px-3 py-2">Open due soon</th>
+                      <th className="text-left px-3 py-2">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(slaSimulation?.scenarios || []).map((scenario) => (
+                      <tr key={scenario.target_days} className="border-b border-slate-800">
+                        <td className="px-3 py-2 text-white text-sm">{scenario.target_days}d</td>
+                        <td className="px-3 py-2 text-slate-300 text-sm">{scenario.warning_days}d</td>
+                        <td className="px-3 py-2 text-slate-300 text-sm">
+                          {scenario.historical_hit_rate === null
+                            ? 'No history yet'
+                            : `${scenario.historical_hit_rate}% (${scenario.historical_within_count}/${scenario.historical_sample_size})`}
+                        </td>
+                        <td className="px-3 py-2 text-sm text-red-300">{scenario.open_breaching}</td>
+                        <td className="px-3 py-2 text-sm text-amber-300">{scenario.open_due_soon}</td>
+                        <td className="px-3 py-2">
+                          <button
+                            onClick={() => applySimulatedPolicy(scenario)}
+                            disabled={saveSlaPolicyMutation.isPending}
+                            className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-xs text-white font-medium"
+                          >
+                            Apply
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">

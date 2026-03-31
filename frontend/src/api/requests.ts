@@ -148,11 +148,69 @@ export async function triggerJellyfinScan() {
   return data
 }
 
-export async function getAnalytics() {
+export interface AdminAnalytics {
+  total_requests_all_time: number
+  fulfilled_all_time: number
+  fulfillment_rate: number
+  avg_lead_time_days: number | null
+  median_lead_time_days: number | null
+  p90_lead_time_days: number | null
+  sla_days: number
+  fulfilled_within_sla_count: number
+  fulfilled_outside_sla_count: number
+  fulfilled_within_sla_rate: number
+  recommended_sla_days: number | null
+  recommended_sla_within_rate: number | null
+  recommended_sla_sample_size: number
+  open_count: number
+  pending_count: number
+  approved_count: number
+  denied_count: number
+  escalated_count: number
+  oldest_open_days: number
+  open_breaching_sla: number
+  open_breaching_recommended_sla: number | null
+  open_due_soon: number
+  top_requesters: { username: string; count: number }[]
+  by_media_type: { media_type: string; total: number; fulfilled: number }[]
+  monthly_volume: { month: string; submitted: number; fulfilled: number }[]
+  weekly_throughput: { week: string; fulfilled: number }[]
+  total_supporters_ever: number
+  avg_supporters_per_request: number
+}
+
+export async function getAnalytics(): Promise<AdminAnalytics> {
   const { data } = await client.get('/admin/analytics')
   return data
 }
 
+export async function applyRecommendedSlaPolicy(warning_days_override?: number): Promise<SlaPolicy> {
+  const body = warning_days_override === undefined ? {} : { warning_days_override }
+  const { data } = await client.post('/admin/sla-policy/apply-recommended', body)
+  return data
+}
+
+export interface SlaSimulationScenario {
+  target_days: number
+  warning_days: number
+  historical_hit_rate: number | null
+  historical_within_count: number
+  historical_sample_size: number
+  open_breaching: number
+  open_due_soon: number
+}
+
+export interface SlaSimulationResponse {
+  scenarios: SlaSimulationScenario[]
+  open_sample_size: number
+  historical_sample_size: number
+}
+
+export async function simulateSlaPolicy(targetDays: number[]): Promise<SlaSimulationResponse> {
+  const targets = targetDays.join(',')
+  const { data } = await client.get('/admin/sla-policy/simulate', { params: { targets } })
+  return data
+}
 
 export async function updateJellyfinLink(id: number, jellyfin_item_id: string | null) {
   const { data } = await client.patch(`/admin/requests/${id}/jellyfin-link`, { jellyfin_item_id })

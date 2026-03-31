@@ -128,6 +128,10 @@ class SlaPolicyUpdate(BaseModel):
     warning_days: int = Field(..., ge=0, le=30)
 
 
+class SlaPolicyApplyRecommendedRequest(BaseModel):
+    warning_days_override: int | None = Field(default=None, ge=0)
+
+
 class SlaEscalationBulkRequest(BaseModel):
     request_ids: list[int] = Field(..., min_length=1)
     note: str | None = Field(default=None, max_length=500)
@@ -294,10 +298,10 @@ async def get_analytics(
     admin: dict = Depends(require_admin),
     db=Depends(get_db),
 ):
-    from app.config import settings
     from app.services.analytics_service import get_analytics as _get_analytics
 
-    return _get_analytics(db, sla_days=settings.request_sla_days)
+    policy = request_service.get_sla_policy(db)
+    return _get_analytics(db, sla_days=policy["target_days"])
 
 
 @router.get("/sla-policy")
@@ -317,6 +321,64 @@ async def patch_sla_policy(
     if body.warning_days >= body.target_days:
         raise HTTPException(status_code=400, detail="warning_days must be less than target_days")
     return request_service.update_sla_policy(db, target_days=body.target_days, warning_days=body.warning_days)
+
+
+@router.post("/sla-policy/apply-recommended")
+async def apply_recommended_sla_policy(
+    body: SlaPolicyApplyRecommendedRequest | None = None,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    from app.services.analytics_service import get_analytics as _get_analytics
+
+    current_policy = request_service.get_sla_policy(db)
+    analytics = _get_analytics(db, sla_days=current_policy["target_days"])
+    recommended_target = analytics.get("recommended_sla_days")
+
+    if recommended_target is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No recommended SLA is available yet. Fulfill at least one request first.",
+        )
+
+    target_days = max(int(recommended_target), 1)
+    if body is None or body.warning_days_override is None:
+        warning_days = min(max(target_days - 2, 0), max(target_days - 1, 0))
+    else:
+        warning_days = body.warning_days_override
+
+    return request_service.update_sla_policy(
+        db,
+        target_days=target_days,
+        warning_days=warning_days,
+    )
+
+
+@router.get("/sla-policy/simulate")
+async def simulate_sla_policy_targets(
+    targets: str = Query("3,5,7,10,14"),
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    from app.services.analytics_service import get_sla_target_simulation
+
+    parsed_targets: list[int] = []
+    for raw_target in targets.split(","):
+        token = raw_target.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid SLA target: {token}")
+        if value < 1 or value > 90:
+            raise HTTPException(status_code=400, detail="SLA targets must be between 1 and 90 days")
+        parsed_targets.append(value)
+
+    if not parsed_targets:
+        raise HTTPException(status_code=400, detail="At least one SLA target is required")
+
+    return get_sla_target_simulation(db, parsed_targets)
 
 
 @router.get("/sla-worklist")
