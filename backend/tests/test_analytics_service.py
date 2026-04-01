@@ -102,15 +102,20 @@ class AnalyticsSlaTests(unittest.TestCase):
         self.assertIsNotNone(analytics["open_breaching_recommended_sla"])
 
     def test_sla_target_simulation_compares_multiple_targets(self):
-        simulation = get_sla_target_simulation(self.conn, [3, 7, 12])
+        simulation = get_sla_target_simulation(self.conn, [3, 7, 12], current_target_days=7)
 
         self.assertEqual(simulation["historical_sample_size"], 2)
         self.assertEqual(simulation["open_sample_size"], 1)
+        self.assertEqual(simulation["current_target_days"], 7)
         self.assertEqual([row["target_days"] for row in simulation["scenarios"]], [3, 7, 12])
 
         seven_day = next(row for row in simulation["scenarios"] if row["target_days"] == 7)
         self.assertEqual(seven_day["historical_hit_rate"], 50.0)
         self.assertEqual(seven_day["open_breaching"], 1)
+        self.assertEqual(seven_day["delta_vs_current"]["open_breaching"], 0)
+        self.assertIn("operational_risk_score", seven_day)
+
+        self.assertIn(simulation["recommended_target_days"], [3, 7, 12])
 
 
 if __name__ == "__main__":

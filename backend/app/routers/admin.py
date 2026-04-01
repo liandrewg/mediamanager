@@ -378,7 +378,12 @@ async def simulate_sla_policy_targets(
     if not parsed_targets:
         raise HTTPException(status_code=400, detail="At least one SLA target is required")
 
-    return get_sla_target_simulation(db, parsed_targets)
+    policy = request_service.get_sla_policy(db)
+    return get_sla_target_simulation(
+        db,
+        parsed_targets,
+        current_target_days=policy["target_days"],
+    )
 
 
 @router.get("/sla-worklist")

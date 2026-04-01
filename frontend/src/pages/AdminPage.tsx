@@ -1139,41 +1139,77 @@ export default function AdminPage() {
             {slaSimulationLoading ? (
               <p className="text-sm text-slate-400">Simulating targets...</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[680px]">
+              <div className="space-y-2 overflow-x-auto">
+                {slaSimulation?.recommended_target_days !== null && slaSimulation?.recommended_target_days !== undefined && (
+                  <p className="text-xs text-slate-400">
+                    Recommended target for current queue pressure: <span className="font-semibold text-emerald-300">{slaSimulation.recommended_target_days}d</span>
+                    {slaSimulation.current_target_days
+                      ? ` (current policy: ${slaSimulation.current_target_days}d)`
+                      : ''}
+                  </p>
+                )}
+                <table className="w-full min-w-[860px]">
                   <thead>
                     <tr className="border-b border-slate-700 text-slate-400 text-sm">
                       <th className="text-left px-3 py-2">Target</th>
                       <th className="text-left px-3 py-2">Auto warn</th>
                       <th className="text-left px-3 py-2">Historical hit rate</th>
-                      <th className="text-left px-3 py-2">Open breaching now</th>
+                      <th className="text-left px-3 py-2">Open breaching</th>
                       <th className="text-left px-3 py-2">Open due soon</th>
+                      <th className="text-left px-3 py-2">Risk score</th>
+                      <th className="text-left px-3 py-2">Δ vs current</th>
                       <th className="text-left px-3 py-2">Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(slaSimulation?.scenarios || []).map((scenario) => (
-                      <tr key={scenario.target_days} className="border-b border-slate-800">
-                        <td className="px-3 py-2 text-white text-sm">{scenario.target_days}d</td>
-                        <td className="px-3 py-2 text-slate-300 text-sm">{scenario.warning_days}d</td>
-                        <td className="px-3 py-2 text-slate-300 text-sm">
-                          {scenario.historical_hit_rate === null
-                            ? 'No history yet'
-                            : `${scenario.historical_hit_rate}% (${scenario.historical_within_count}/${scenario.historical_sample_size})`}
-                        </td>
-                        <td className="px-3 py-2 text-sm text-red-300">{scenario.open_breaching}</td>
-                        <td className="px-3 py-2 text-sm text-amber-300">{scenario.open_due_soon}</td>
-                        <td className="px-3 py-2">
-                          <button
-                            onClick={() => applySimulatedPolicy(scenario)}
-                            disabled={saveSlaPolicyMutation.isPending}
-                            className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-xs text-white font-medium"
-                          >
-                            Apply
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {(slaSimulation?.scenarios || []).map((scenario) => {
+                      const delta = scenario.delta_vs_current
+                      const formatDelta = (value: number) => (value > 0 ? `+${value}` : `${value}`)
+
+                      return (
+                        <tr key={scenario.target_days} className="border-b border-slate-800">
+                          <td className="px-3 py-2 text-white text-sm">
+                            <div className="flex items-center gap-2">
+                              <span>{scenario.target_days}d</span>
+                              {scenario.is_recommended && (
+                                <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                                  Recommended
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-slate-300 text-sm">{scenario.warning_days}d</td>
+                          <td className="px-3 py-2 text-slate-300 text-sm">
+                            {scenario.historical_hit_rate === null
+                              ? 'No history yet'
+                              : `${scenario.historical_hit_rate}% (${scenario.historical_within_count}/${scenario.historical_sample_size})`}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-red-300">{scenario.open_breaching}</td>
+                          <td className="px-3 py-2 text-sm text-amber-300">{scenario.open_due_soon}</td>
+                          <td className="px-3 py-2 text-sm text-slate-200">{scenario.operational_risk_score}</td>
+                          <td className="px-3 py-2 text-xs text-slate-300">
+                            {delta ? (
+                              <div className="space-y-0.5">
+                                <div>Breaches: <span className={delta.open_breaching <= 0 ? 'text-emerald-300' : 'text-red-300'}>{formatDelta(delta.open_breaching)}</span></div>
+                                <div>Due soon: <span className={delta.open_due_soon <= 0 ? 'text-emerald-300' : 'text-amber-300'}>{formatDelta(delta.open_due_soon)}</span></div>
+                                <div>Risk: <span className={delta.operational_risk_score <= 0 ? 'text-emerald-300' : 'text-red-300'}>{formatDelta(delta.operational_risk_score)}</span></div>
+                              </div>
+                            ) : (
+                              <span className="text-slate-500">Baseline</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <button
+                              onClick={() => applySimulatedPolicy(scenario)}
+                              disabled={saveSlaPolicyMutation.isPending}
+                              className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-xs text-white font-medium"
+                            >
+                              Apply
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

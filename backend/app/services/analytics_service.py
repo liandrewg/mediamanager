@@ -53,12 +53,16 @@ def get_analytics(conn: sqlite3.Connection, sla_days: int = 7) -> dict:
         conn.row_factory = original_factory
 
 
-def get_sla_target_simulation(conn: sqlite3.Connection, target_days: list[int]) -> dict:
+def get_sla_target_simulation(
+    conn: sqlite3.Connection,
+    target_days: list[int],
+    current_target_days: int | None = None,
+) -> dict:
     original_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
 
     try:
-        return _compute_sla_target_simulation(conn, target_days)
+        return _compute_sla_target_simulation(conn, target_days, current_target_days=current_target_days)
     finally:
         conn.row_factory = original_factory
 
@@ -262,7 +266,11 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     }
 
 
-def _compute_sla_target_simulation(conn: sqlite3.Connection, targets: list[int]) -> dict:
+def _compute_sla_target_simulation(
+    conn: sqlite3.Connection,
+    targets: list[int],
+    current_target_days: int | None = None,
+) -> dict:
     normalized_targets = sorted({max(int(target), 1) for target in targets if int(target) > 0})
     if not normalized_targets:
         normalized_targets = [7]
@@ -293,6 +301,10 @@ def _compute_sla_target_simulation(conn: sqlite3.Connection, targets: list[int])
         if dt:
             open_ages.append(max((now - dt).days, 0))
 
+    def _risk_score(*, breached: int, due_soon: int, hit_rate: float | None) -> float:
+        miss_rate = 50.0 if hit_rate is None else max(0.0, 100.0 - hit_rate)
+        return round((breached * 100.0) + (due_soon * 35.0) + (miss_rate * 0.5), 1)
+
     scenarios: list[dict] = []
     for target in normalized_targets:
         warning_days = min(max(target - 2, 0), max(target - 1, 0))
@@ -314,11 +326,70 @@ def _compute_sla_target_simulation(conn: sqlite3.Connection, targets: list[int])
                 "historical_sample_size": len(lead_times),
                 "open_breaching": breached,
                 "open_due_soon": due_soon,
+                "operational_risk_score": _risk_score(breached=breached, due_soon=due_soon, hit_rate=hit_rate),
             }
         )
+
+    current_target = max(int(current_target_days), 1) if current_target_days else None
+    baseline_scenario = next((row for row in scenarios if row["target_days"] == current_target), None)
+
+    if baseline_scenario is None and current_target is not None:
+        warning_days = min(max(current_target - 2, 0), max(current_target - 1, 0))
+        if lead_times:
+            within = sum(1 for value in lead_times if value <= current_target)
+            hit_rate = round(within / len(lead_times) * 100, 1)
+        else:
+            within = 0
+            hit_rate = None
+        breached = sum(1 for age in open_ages if age > current_target)
+        due_soon = sum(1 for age in open_ages if current_target - warning_days <= age <= current_target)
+        baseline_scenario = {
+            "target_days": current_target,
+            "warning_days": warning_days,
+            "historical_hit_rate": hit_rate,
+            "historical_within_count": within,
+            "historical_sample_size": len(lead_times),
+            "open_breaching": breached,
+            "open_due_soon": due_soon,
+            "operational_risk_score": _risk_score(breached=breached, due_soon=due_soon, hit_rate=hit_rate),
+        }
+
+    for row in scenarios:
+        if baseline_scenario is None:
+            row["delta_vs_current"] = None
+            continue
+
+        current_hit_rate = baseline_scenario["historical_hit_rate"]
+        row["delta_vs_current"] = {
+            "open_breaching": row["open_breaching"] - baseline_scenario["open_breaching"],
+            "open_due_soon": row["open_due_soon"] - baseline_scenario["open_due_soon"],
+            "historical_hit_rate": None
+            if current_hit_rate is None or row["historical_hit_rate"] is None
+            else round(row["historical_hit_rate"] - current_hit_rate, 1),
+            "operational_risk_score": round(
+                row["operational_risk_score"] - baseline_scenario["operational_risk_score"],
+                1,
+            ),
+        }
+
+    recommended_target_days = None
+    if scenarios:
+        recommended = min(
+            scenarios,
+            key=lambda row: (
+                row["operational_risk_score"],
+                -(row["historical_hit_rate"] or 0.0),
+                abs(row["target_days"] - (current_target or row["target_days"])),
+            ),
+        )
+        recommended_target_days = recommended["target_days"]
+        for row in scenarios:
+            row["is_recommended"] = row["target_days"] == recommended_target_days
 
     return {
         "scenarios": scenarios,
         "open_sample_size": len(open_ages),
         "historical_sample_size": len(lead_times),
+        "current_target_days": current_target,
+        "recommended_target_days": recommended_target_days,
     }

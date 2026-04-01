@@ -190,6 +190,13 @@ export async function applyRecommendedSlaPolicy(warning_days_override?: number):
   return data
 }
 
+export interface SlaSimulationScenarioDelta {
+  open_breaching: number
+  open_due_soon: number
+  historical_hit_rate: number | null
+  operational_risk_score: number
+}
+
 export interface SlaSimulationScenario {
   target_days: number
   warning_days: number
@@ -198,12 +205,17 @@ export interface SlaSimulationScenario {
   historical_sample_size: number
   open_breaching: number
   open_due_soon: number
+  operational_risk_score: number
+  delta_vs_current: SlaSimulationScenarioDelta | null
+  is_recommended: boolean
 }
 
 export interface SlaSimulationResponse {
   scenarios: SlaSimulationScenario[]
   open_sample_size: number
   historical_sample_size: number
+  current_target_days: number | null
+  recommended_target_days: number | null
 }
 
 export async function simulateSlaPolicy(targetDays: number[]): Promise<SlaSimulationResponse> {

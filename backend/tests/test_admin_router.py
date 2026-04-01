@@ -132,6 +132,16 @@ class SimulateSlaTargetsRouteTests(unittest.TestCase):
                 note TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                target_days INTEGER NOT NULL DEFAULT 7 CHECK (target_days >= 1),
+                warning_days INTEGER NOT NULL DEFAULT 2 CHECK (warning_days >= 0),
+                updated_at TEXT
+            );
+
+            INSERT INTO sla_policy (id, target_days, warning_days, updated_at)
+            VALUES (1, 7, 2, '2026-03-30T00:00:00+00:00');
             """
         )
 
@@ -157,6 +167,15 @@ class SimulateSlaTargetsRouteTests(unittest.TestCase):
         response = self.client.get('/api/admin/sla-policy/simulate?targets=7,abc')
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "Invalid SLA target: abc")
+
+    def test_simulation_includes_current_target_and_recommendation_metadata(self):
+        response = self.client.get('/api/admin/sla-policy/simulate?targets=3,7,10')
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["current_target_days"], 7)
+        self.assertIn(body["recommended_target_days"], [3, 7, 10])
+        self.assertEqual(len(body["scenarios"]), 3)
+        self.assertIn("operational_risk_score", body["scenarios"][0])
 
 
 if __name__ == "__main__":
