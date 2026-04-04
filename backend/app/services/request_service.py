@@ -1,6 +1,7 @@
 import sqlite3
 import math
-from datetime import datetime, timezone
+import statistics
+from datetime import datetime, timezone, timedelta
 
 from app.config import settings
 
@@ -49,6 +50,10 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
     days_open = max((datetime.now(timezone.utc) - created_dt).days, 0)
     req["days_open"] = days_open
     req["priority_score"] = round((req["supporter_count"] * 3) + min(days_open, 30), 1)
+    req["queue_position"] = None
+    req["queue_size"] = None
+    req["next_step_label"] = None
+    req["next_step_by"] = None
 
     req["is_owner"] = user_id == req["user_id"] if user_id else False
     req["user_supporting"] = False
@@ -67,6 +72,71 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
     else:
         req["watch_url"] = None
     return req
+
+
+def _estimate_median_fulfillment_days(conn: sqlite3.Connection) -> float | None:
+    try:
+        rows = conn.execute(
+            """
+            SELECT r.created_at AS req_created, rh.created_at AS fulfilled_at
+            FROM request_history rh
+            JOIN requests r ON r.id = rh.request_id
+            WHERE rh.new_status = 'fulfilled'
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+
+    lead_times: list[float] = []
+    for row in rows:
+        req_dt = _parse_request_datetime(row["req_created"])
+        ful_dt = _parse_request_datetime(row["fulfilled_at"])
+        if ful_dt >= req_dt:
+            lead_times.append((ful_dt - req_dt).total_seconds() / 86400.0)
+
+    if not lead_times:
+        return None
+    return statistics.median(lead_times)
+
+
+def _iso_after_days(days: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=max(days, 0))).date().isoformat()
+
+
+def _build_next_step_hint(
+    *,
+    req: dict,
+    policy_target_days: int,
+    median_fulfillment_days: float | None,
+) -> tuple[str | None, str | None]:
+    status = req.get("status")
+    days_open = int(req.get("days_open") or 0)
+    queue_position = req.get("queue_position")
+
+    if status == "pending":
+        remaining = max(policy_target_days - days_open, 0)
+        queue_text = f" (queue #{queue_position})" if queue_position else ""
+        return (
+            f"Admin review expected within {remaining}d{queue_text}",
+            _iso_after_days(remaining),
+        )
+
+    if status == "approved":
+        if median_fulfillment_days is not None:
+            remaining = max(int(round(median_fulfillment_days)) - days_open, 0)
+            return (
+                f"Typical fulfillment in ~{remaining}d based on household history",
+                _iso_after_days(remaining),
+            )
+        return ("Approved, waiting for library availability", None)
+
+    if status == "fulfilled":
+        return ("Ready to watch now", None)
+
+    if status == "denied":
+        return ("Denied, request a similar title to reopen demand", None)
+
+    return (None, None)
 
 
 def _create_request_notifications(
@@ -561,8 +631,35 @@ def get_user_requests(
         params + [limit, offset],
     ).fetchall()
 
+    items = [_serialize_request(conn, r, user_id) for r in rows]
+
+    open_rows = conn.execute(
+        """
+        SELECT r.*, (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) as supporter_count
+        FROM requests r
+        WHERE r.status IN ('pending', 'approved')
+        ORDER BY supporter_count DESC, r.created_at ASC, r.id ASC
+        """
+    ).fetchall()
+    queue_positions = {row["id"]: idx + 1 for idx, row in enumerate(open_rows)}
+    queue_size = len(open_rows)
+
+    policy = get_sla_policy(conn)
+    median_fulfillment_days = _estimate_median_fulfillment_days(conn)
+    for req in items:
+        if req.get("status") in OPEN_REQUEST_STATUSES:
+            req["queue_position"] = queue_positions.get(req["id"])
+            req["queue_size"] = queue_size
+        label, next_step_by = _build_next_step_hint(
+            req=req,
+            policy_target_days=policy["target_days"],
+            median_fulfillment_days=median_fulfillment_days,
+        )
+        req["next_step_label"] = label
+        req["next_step_by"] = next_step_by
+
     return {
-        "items": [_serialize_request(conn, r, user_id) for r in rows],
+        "items": items,
         "total": total,
         "page": page,
         "limit": limit,

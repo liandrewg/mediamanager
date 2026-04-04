@@ -54,6 +54,10 @@ export interface RequestRecord {
   user_supporting: boolean
   days_open: number
   priority_score: number
+  queue_position?: number | null
+  queue_size?: number | null
+  next_step_label?: string | null
+  next_step_by?: string | null
   jellyfin_item_id?: string | null
   watch_url?: string | null
   created_at: string

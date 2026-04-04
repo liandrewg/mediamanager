@@ -1000,3 +1000,106 @@ class SlaPolicyAndWorklistTests(unittest.TestCase):
         row = self.conn.execute("SELECT target_days, warning_days FROM sla_policy WHERE id = 1").fetchone()
         self.assertEqual(row["target_days"], 5)
         self.assertEqual(row["warning_days"], 4)
+
+
+class UserRequestTransparencyHintsTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                target_days INTEGER NOT NULL,
+                warning_days INTEGER NOT NULL,
+                updated_at TEXT
+            );
+            """
+        )
+
+        self.conn.execute("INSERT INTO sla_policy (id, target_days, warning_days, updated_at) VALUES (1, 7, 2, '2026-03-01T00:00:00+00:00')")
+
+        fixtures = [
+            ("u1", "alice", 101, "movie", "Queued A", "pending", "2026-03-10T00:00:00+00:00"),
+            ("u2", "bob", 202, "movie", "Queued B", "pending", "2026-03-11T00:00:00+00:00"),
+            ("u3", "cara", 303, "tv", "Approved C", "approved", "2026-03-08T00:00:00+00:00"),
+        ]
+        for user_id, username, tmdb_id, media_type, title, status, created_at in fixtures:
+            cur = self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, username, tmdb_id, media_type, title, status, created_at, created_at),
+            )
+            req_id = cur.lastrowid
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+                (req_id, user_id, username, created_at),
+            )
+
+        # make request 1 highest priority by supporter count so it's queue #1
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'fan-1', 'fan', '2026-03-12T00:00:00+00:00')"
+        )
+
+        # historical fulfillment sample used for approved request estimate
+        self.conn.execute(
+            "INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at) VALUES (1, 'approved', 'fulfilled', 'system', 'done', '2026-03-16T00:00:00+00:00')"
+        )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_get_user_requests_includes_queue_and_next_step_hints(self):
+        frozen_now = datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc)
+        with patch.object(request_service, "datetime") as mock_datetime:
+            mock_datetime.now.return_value = frozen_now
+            mock_datetime.utcnow.return_value = datetime(2026, 3, 16, 0, 0)
+            mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+            mock_datetime.strptime.side_effect = datetime.strptime
+
+            result = request_service.get_user_requests(self.conn, user_id="u1", page=1, limit=20)
+
+        self.assertEqual(result["total"], 1)
+        item = result["items"][0]
+        self.assertEqual(item["title"], "Queued A")
+        self.assertEqual(item["queue_position"], 1)
+        self.assertEqual(item["queue_size"], 3)
+        self.assertIn("Admin review expected", item["next_step_label"])
+        self.assertEqual(item["next_step_by"], "2026-03-17")

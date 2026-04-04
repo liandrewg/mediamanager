@@ -21,6 +21,16 @@ function WatchNowButton({ url }: { url: string }) {
   )
 }
 
+function NextStepHint({ req }: { req: any }) {
+  if (!req.next_step_label) return null
+  return (
+    <p className="text-xs text-cyan-300">
+      Next: {req.next_step_label}
+      {req.next_step_by ? ` (by ${new Date(req.next_step_by).toLocaleDateString()})` : ''}
+    </p>
+  )
+}
+
 export default function MyRequestsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
@@ -99,6 +109,10 @@ export default function MyRequestsPage() {
                 <p className="text-xs text-slate-400 italic border-l-2 border-slate-600 pl-2">{req.admin_note}</p>
               )}
               <p className="text-xs text-slate-500">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
+              {req.queue_position && req.queue_size && (
+                <p className="text-xs text-slate-500">Queue position: #{req.queue_position} of {req.queue_size}</p>
+              )}
+              <NextStepHint req={req} />
               <div className="flex items-center gap-3 flex-wrap">
                 {req.watch_url && (
                   <WatchNowButton url={req.watch_url} />
@@ -139,6 +153,7 @@ export default function MyRequestsPage() {
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Status</th>
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Date</th>
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Supporters</th>
+                  <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Next Step</th>
                   <th className="text-left px-4 py-3 text-sm text-slate-400 font-medium">Note</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -156,6 +171,18 @@ export default function MyRequestsPage() {
                         {new Date(req.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3 text-slate-400 text-sm">{req.supporter_count || 1}</td>
+                      <td className="px-4 py-3 text-slate-300 text-xs">
+                        {req.next_step_label ? (
+                          <div>
+                            <div>{req.next_step_label}</div>
+                            {req.queue_position && req.queue_size && (
+                              <div className="text-slate-500 mt-0.5">Queue #{req.queue_position}/{req.queue_size}</div>
+                            )}
+                          </div>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-slate-400 text-sm">{req.admin_note || '-'}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3 flex-wrap">
@@ -182,7 +209,7 @@ export default function MyRequestsPage() {
                     </tr>
                     {expandedComments.has(req.id) && (
                       <tr key={`comments-${req.id}`} className="border-b border-slate-700/50 bg-slate-800/50">
-                        <td colSpan={7} className="px-4 py-2">
+                        <td colSpan={8} className="px-4 py-2">
                           <RequestComments requestId={req.id} />
                         </td>
                       </tr>

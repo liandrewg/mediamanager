@@ -44,6 +44,10 @@ class RequestResponse(BaseModel):
     user_supporting: bool = False
     days_open: int = 0
     priority_score: float = 0
+    queue_position: Optional[int] = None
+    queue_size: Optional[int] = None
+    next_step_label: Optional[str] = None
+    next_step_by: Optional[str] = None
     jellyfin_item_id: Optional[str] = None
     watch_url: Optional[str] = None
     created_at: str
