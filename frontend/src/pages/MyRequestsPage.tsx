@@ -31,6 +31,28 @@ function NextStepHint({ req }: { req: any }) {
   )
 }
 
+function EtaHint({ req }: { req: any }) {
+  if (!req.eta_label) return null
+
+  const etaConfidence: 'low' | 'medium' | 'high' =
+    req.eta_confidence === 'high' || req.eta_confidence === 'medium' ? req.eta_confidence : 'low'
+  const confidenceStyle = {
+    high: 'text-emerald-300',
+    medium: 'text-amber-300',
+    low: 'text-slate-300',
+  }[etaConfidence]
+
+  return (
+    <p className={`text-xs ${confidenceStyle}`}>
+      ETA: {req.eta_label}
+      {req.eta_start && req.eta_end
+        ? ` (${new Date(req.eta_start).toLocaleDateString()} - ${new Date(req.eta_end).toLocaleDateString()})`
+        : ''}
+      {req.eta_confidence ? `, ${req.eta_confidence} confidence` : ''}
+    </p>
+  )
+}
+
 export default function MyRequestsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
@@ -113,6 +135,7 @@ export default function MyRequestsPage() {
                 <p className="text-xs text-slate-500">Queue position: #{req.queue_position} of {req.queue_size}</p>
               )}
               <NextStepHint req={req} />
+              <EtaHint req={req} />
               <div className="flex items-center gap-3 flex-wrap">
                 {req.watch_url && (
                   <WatchNowButton url={req.watch_url} />
@@ -177,6 +200,12 @@ export default function MyRequestsPage() {
                             <div>{req.next_step_label}</div>
                             {req.queue_position && req.queue_size && (
                               <div className="text-slate-500 mt-0.5">Queue #{req.queue_position}/{req.queue_size}</div>
+                            )}
+                            {req.eta_label && (
+                              <div className="text-emerald-300 mt-0.5">
+                                ETA: {req.eta_label}
+                                {req.eta_confidence ? ` (${req.eta_confidence})` : ''}
+                              </div>
                             )}
                           </div>
                         ) : (

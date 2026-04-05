@@ -58,6 +58,10 @@ export interface RequestRecord {
   queue_size?: number | null
   next_step_label?: string | null
   next_step_by?: string | null
+  eta_label?: string | null
+  eta_start?: string | null
+  eta_end?: string | null
+  eta_confidence?: 'low' | 'medium' | 'high' | null
   jellyfin_item_id?: string | null
   watch_url?: string | null
   created_at: string

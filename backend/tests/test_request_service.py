@@ -1081,6 +1081,12 @@ class UserRequestTransparencyHintsTests(unittest.TestCase):
         self.conn.execute(
             "INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at) VALUES (1, 'approved', 'fulfilled', 'system', 'done', '2026-03-16T00:00:00+00:00')"
         )
+        self.conn.execute(
+            "INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at) VALUES (2, 'approved', 'fulfilled', 'system', 'done', '2026-03-18T00:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at) VALUES (3, 'approved', 'fulfilled', 'system', 'done', '2026-03-12T00:00:00+00:00')"
+        )
         self.conn.commit()
 
     def tearDown(self):
@@ -1103,3 +1109,21 @@ class UserRequestTransparencyHintsTests(unittest.TestCase):
         self.assertEqual(item["queue_size"], 3)
         self.assertIn("Admin review expected", item["next_step_label"])
         self.assertEqual(item["next_step_by"], "2026-03-17")
+
+    def test_get_user_requests_includes_approved_eta_window(self):
+        frozen_now = datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc)
+        with patch.object(request_service, "datetime") as mock_datetime:
+            mock_datetime.now.return_value = frozen_now
+            mock_datetime.utcnow.return_value = datetime(2026, 3, 16, 0, 0)
+            mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+            mock_datetime.strptime.side_effect = datetime.strptime
+
+            result = request_service.get_user_requests(self.conn, user_id="u3", page=1, limit=20)
+
+        self.assertEqual(result["total"], 1)
+        item = result["items"][0]
+        self.assertEqual(item["title"], "Approved C")
+        self.assertIn("Likely available", item["eta_label"])
+        self.assertEqual(item["eta_start"], "2026-03-16")
+        self.assertEqual(item["eta_end"], "2026-03-16")
+        self.assertEqual(item["eta_confidence"], "low")

@@ -99,6 +99,55 @@ def _estimate_median_fulfillment_days(conn: sqlite3.Connection) -> float | None:
     return statistics.median(lead_times)
 
 
+def _estimate_fulfillment_window(conn: sqlite3.Connection) -> dict | None:
+    try:
+        rows = conn.execute(
+            """
+            SELECT r.created_at AS req_created, rh.created_at AS fulfilled_at
+            FROM request_history rh
+            JOIN requests r ON r.id = rh.request_id
+            WHERE rh.new_status = 'fulfilled'
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+
+    lead_times: list[float] = []
+    for row in rows:
+        req_dt = _parse_request_datetime(row["req_created"])
+        ful_dt = _parse_request_datetime(row["fulfilled_at"])
+        if ful_dt >= req_dt:
+            lead_times.append((ful_dt - req_dt).total_seconds() / 86400.0)
+
+    if not lead_times:
+        return None
+
+    lead_times.sort()
+
+    def _percentile(values: list[float], pct: float) -> float:
+        if len(values) == 1:
+            return values[0]
+        position = (len(values) - 1) * pct
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return values[int(position)]
+        weight = position - lower
+        return values[lower] * (1 - weight) + values[upper] * weight
+
+    p50 = _percentile(lead_times, 0.5)
+    p80 = _percentile(lead_times, 0.8)
+    sample_size = len(lead_times)
+    confidence = "high" if sample_size >= 15 else ("medium" if sample_size >= 6 else "low")
+
+    return {
+        "sample_size": sample_size,
+        "p50_days": p50,
+        "p80_days": p80,
+        "confidence": confidence,
+    }
+
+
 def _iso_after_days(days: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=max(days, 0))).date().isoformat()
 
@@ -646,6 +695,7 @@ def get_user_requests(
 
     policy = get_sla_policy(conn)
     median_fulfillment_days = _estimate_median_fulfillment_days(conn)
+    fulfillment_window = _estimate_fulfillment_window(conn)
     for req in items:
         if req.get("status") in OPEN_REQUEST_STATUSES:
             req["queue_position"] = queue_positions.get(req["id"])
@@ -657,6 +707,25 @@ def get_user_requests(
         )
         req["next_step_label"] = label
         req["next_step_by"] = next_step_by
+
+        req["eta_label"] = None
+        req["eta_start"] = None
+        req["eta_end"] = None
+        req["eta_confidence"] = None
+
+        if req.get("status") == "approved" and fulfillment_window:
+            remaining_start = max(int(round(fulfillment_window["p50_days"])) - req["days_open"], 0)
+            remaining_end = max(int(math.ceil(fulfillment_window["p80_days"])) - req["days_open"], remaining_start)
+            req["eta_start"] = _iso_after_days(remaining_start)
+            req["eta_end"] = _iso_after_days(remaining_end)
+            req["eta_confidence"] = fulfillment_window["confidence"]
+
+            if remaining_end == 0:
+                req["eta_label"] = "Likely available any day now"
+            elif remaining_start == remaining_end:
+                req["eta_label"] = f"Likely available in ~{remaining_end}d"
+            else:
+                req["eta_label"] = f"Likely available in {remaining_start}-{remaining_end}d"
 
     return {
         "items": items,

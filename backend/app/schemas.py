@@ -48,6 +48,10 @@ class RequestResponse(BaseModel):
     queue_size: Optional[int] = None
     next_step_label: Optional[str] = None
     next_step_by: Optional[str] = None
+    eta_label: Optional[str] = None
+    eta_start: Optional[str] = None
+    eta_end: Optional[str] = None
+    eta_confidence: Optional[str] = None
     jellyfin_item_id: Optional[str] = None
     watch_url: Optional[str] = None
     created_at: str
