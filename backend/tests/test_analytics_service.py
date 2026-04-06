@@ -117,6 +117,24 @@ class AnalyticsSlaTests(unittest.TestCase):
 
         self.assertIn(simulation["recommended_target_days"], [3, 7, 12])
 
+    def test_media_type_sla_insights_include_recommendations_and_open_risk(self):
+        analytics = get_analytics(self.conn, sla_days=7)
+
+        insights = {row["media_type"]: row for row in analytics["media_type_sla_insights"]}
+        self.assertIn("movie", insights)
+        self.assertIn("tv", insights)
+
+        movie = insights["movie"]
+        self.assertEqual(movie["fulfilled_sample_size"], 1)
+        self.assertEqual(movie["recommended_target_days"], 2)
+        self.assertEqual(movie["open_count"], 1)
+        self.assertGreaterEqual(movie["open_breaching_global_policy"], 1)
+
+        tv = insights["tv"]
+        self.assertEqual(tv["fulfilled_sample_size"], 1)
+        self.assertEqual(tv["recommended_target_days"], 10)
+        self.assertEqual(tv["open_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -179,6 +179,16 @@ export interface AdminAnalytics {
   open_breaching_sla: number
   open_breaching_recommended_sla: number | null
   open_due_soon: number
+  media_type_sla_insights: {
+    media_type: string
+    fulfilled_sample_size: number
+    median_lead_time_days: number | null
+    recommended_target_days: number | null
+    recommended_within_rate: number | null
+    open_count: number
+    open_breaching_global_policy: number
+    open_breaching_recommended: number | null
+  }[]
   top_requesters: { username: string; count: number }[]
   by_media_type: { media_type: string; total: number; fulfilled: number }[]
   monthly_volume: { month: string; submitted: number; fulfilled: number }[]

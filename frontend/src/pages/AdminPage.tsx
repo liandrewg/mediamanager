@@ -1217,6 +1217,50 @@ export default function AdminPage() {
           </div>
 
           <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
+            <h3 className="text-white font-semibold">Media-type SLA Insights</h3>
+            <p className="text-sm text-slate-400">Use this to decide whether one global SLA is fair for movies, shows, and books, before changing household policy.</p>
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[820px]">
+                <thead>
+                  <tr className="border-b border-slate-700 text-slate-400 text-sm">
+                    <th className="text-left px-3 py-2">Type</th>
+                    <th className="text-left px-3 py-2">Fulfilled sample</th>
+                    <th className="text-left px-3 py-2">Median lead time</th>
+                    <th className="text-left px-3 py-2">Suggested target</th>
+                    <th className="text-left px-3 py-2">Hit rate at suggested</th>
+                    <th className="text-left px-3 py-2">Open count</th>
+                    <th className="text-left px-3 py-2">Breaching current policy</th>
+                    <th className="text-left px-3 py-2">Breaching suggested</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(slaAnalytics?.media_type_sla_insights || []).map((row) => (
+                    <tr key={row.media_type} className="border-b border-slate-800">
+                      <td className="px-3 py-2 text-sm text-white uppercase">{row.media_type}</td>
+                      <td className="px-3 py-2 text-sm text-slate-300">{row.fulfilled_sample_size}</td>
+                      <td className="px-3 py-2 text-sm text-slate-300">
+                        {row.median_lead_time_days === null ? 'No history yet' : `${row.median_lead_time_days}d`}
+                      </td>
+                      <td className="px-3 py-2 text-sm text-slate-200">
+                        {row.recommended_target_days === null ? '—' : `${row.recommended_target_days}d`}
+                      </td>
+                      <td className="px-3 py-2 text-sm text-slate-300">
+                        {row.recommended_within_rate === null ? '—' : `${row.recommended_within_rate}%`}
+                      </td>
+                      <td className="px-3 py-2 text-sm text-slate-300">{row.open_count}</td>
+                      <td className="px-3 py-2 text-sm text-red-300">{row.open_breaching_global_policy}</td>
+                      <td className="px-3 py-2 text-sm text-amber-300">
+                        {row.open_breaching_recommended === null ? '—' : row.open_breaching_recommended}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <select value={slaStateFilter} onChange={(e) => setSlaStateFilter(e.target.value as any)} className="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-300 border border-slate-700">
                 <option value="all">All states</option>

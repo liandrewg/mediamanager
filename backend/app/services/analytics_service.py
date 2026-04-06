@@ -83,7 +83,7 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     # --- Lead time (days from request created_at to fulfilled history entry) ---
     history_rows = conn.execute(
         """
-        SELECT r.created_at AS req_created, rh.created_at AS fulfilled_at
+        SELECT r.created_at AS req_created, rh.created_at AS fulfilled_at, r.media_type AS media_type
         FROM request_history rh
         JOIN requests r ON r.id = rh.request_id
         WHERE rh.new_status = 'fulfilled'
@@ -91,12 +91,15 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     ).fetchall()
 
     lead_times: list[float] = []
+    lead_times_by_media_type: dict[str, list[float]] = {}
     for row in history_rows:
         req_dt = _parse_dt(row["req_created"])
         ful_dt = _parse_dt(row["fulfilled_at"])
         if req_dt and ful_dt and ful_dt >= req_dt:
             delta = (ful_dt - req_dt).total_seconds() / 86400.0
             lead_times.append(delta)
+            media_type = row["media_type"] or "unknown"
+            lead_times_by_media_type.setdefault(media_type, []).append(delta)
 
     avg_lead_time_days: float | None = None
     median_lead_time_days: float | None = None
@@ -165,6 +168,54 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         if recommended_sla_days is not None
         else None
     )
+
+    open_rows_with_type = conn.execute(
+        "SELECT media_type, created_at FROM requests WHERE status IN ('pending', 'approved')"
+    ).fetchall()
+    open_ages_by_media_type: dict[str, list[int]] = {}
+    for row in open_rows_with_type:
+        dt = _parse_dt(row["created_at"])
+        if not dt:
+            continue
+        media_type = row["media_type"] or "unknown"
+        open_ages_by_media_type.setdefault(media_type, []).append(max((now - dt).days, 0))
+
+    media_type_sla_insights: list[dict] = []
+    for media_type in sorted(set(list(lead_times_by_media_type.keys()) + list(open_ages_by_media_type.keys()))):
+        media_leads = sorted(lead_times_by_media_type.get(media_type, []))
+        sample_size = len(media_leads)
+        median_days = round(statistics.median(media_leads), 1) if media_leads else None
+
+        recommended_target_days = None
+        recommended_hit_rate = None
+        if media_leads:
+            media_p75 = _percentile(media_leads, 0.75)
+            if media_p75 is not None:
+                recommended_target_days = max(1, math.ceil(media_p75))
+                within = sum(1 for value in media_leads if value <= recommended_target_days)
+                recommended_hit_rate = round(within / sample_size * 100, 1)
+
+        open_media_ages = open_ages_by_media_type.get(media_type, [])
+        open_count_for_type = len(open_media_ages)
+        open_breaching_global_policy = sum(1 for age in open_media_ages if age > sla_days)
+        open_breaching_recommended = (
+            sum(1 for age in open_media_ages if age > recommended_target_days)
+            if recommended_target_days is not None
+            else None
+        )
+
+        media_type_sla_insights.append(
+            {
+                "media_type": media_type,
+                "fulfilled_sample_size": sample_size,
+                "median_lead_time_days": median_days,
+                "recommended_target_days": recommended_target_days,
+                "recommended_within_rate": recommended_hit_rate,
+                "open_count": open_count_for_type,
+                "open_breaching_global_policy": open_breaching_global_policy,
+                "open_breaching_recommended": open_breaching_recommended,
+            }
+        )
 
     # --- Top requesters (top 5 by total requests ever as original requester) ---
     top_requester_rows = conn.execute(
@@ -257,6 +308,7 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         "open_breaching_sla": open_breaching_sla,
         "open_breaching_recommended_sla": open_breaching_recommended_sla,
         "open_due_soon": open_due_soon,
+        "media_type_sla_insights": media_type_sla_insights,
         "top_requesters": top_requesters,
         "by_media_type": by_media_type,
         "monthly_volume": monthly_volume,
