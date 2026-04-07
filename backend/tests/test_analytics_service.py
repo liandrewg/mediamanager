@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from app.services.analytics_service import get_analytics, get_sla_target_simulation
 
@@ -134,6 +135,49 @@ class AnalyticsSlaTests(unittest.TestCase):
         self.assertEqual(tv["fulfilled_sample_size"], 1)
         self.assertEqual(tv["recommended_target_days"], 10)
         self.assertEqual(tv["open_count"], 0)
+
+    def test_weekly_sla_momentum_reports_trend_direction(self):
+        now = datetime.now(timezone.utc)
+        old_created = (now - timedelta(days=30)).isoformat()
+        old_fulfilled = (now - timedelta(days=28)).isoformat()  # within 7-day SLA
+        new_created = (now - timedelta(days=5)).isoformat()
+        new_fulfilled = now.isoformat()  # outside 3-day SLA below
+
+        self.conn.execute(
+            """
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES ('u4', 'drew', 1004, 'movie', 'Weekly Good', 'fulfilled', ?, ?)
+            """,
+            (old_created, old_fulfilled),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+            VALUES (4, 'approved', 'fulfilled', 'admin', '', ?)
+            """,
+            (old_fulfilled,),
+        )
+
+        self.conn.execute(
+            """
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES ('u5', 'erin', 1005, 'tv', 'Weekly Bad', 'fulfilled', ?, ?)
+            """,
+            (new_created, new_fulfilled),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+            VALUES (5, 'approved', 'fulfilled', 'admin', '', ?)
+            """,
+            (new_fulfilled,),
+        )
+        self.conn.commit()
+
+        analytics = get_analytics(self.conn, sla_days=3)
+        self.assertGreaterEqual(len(analytics["weekly_sla_hit_rate"]), 2)
+        self.assertIn(analytics["sla_trend_direction"], ["improving", "flat", "regressing"])
+        self.assertIsInstance(analytics["sla_trend_delta"], float)
 
 
 if __name__ == "__main__":

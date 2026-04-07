@@ -122,6 +122,49 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         else 0.0
     )
 
+    # --- Weekly SLA trend (last 8 weeks) ---
+    weekly_sla_buckets: dict[str, dict[str, int]] = {}
+    weekly_window_now = datetime.now(timezone.utc)
+    for row in history_rows:
+        req_dt = _parse_dt(row["req_created"])
+        ful_dt = _parse_dt(row["fulfilled_at"])
+        if not req_dt or not ful_dt or ful_dt < req_dt:
+            continue
+        if (weekly_window_now - ful_dt).days > 56:
+            continue
+
+        week_key = ful_dt.strftime("%Y-W%W")
+        bucket = weekly_sla_buckets.setdefault(week_key, {"within": 0, "total": 0})
+        bucket["total"] += 1
+        if ((ful_dt - req_dt).total_seconds() / 86400.0) <= sla_days:
+            bucket["within"] += 1
+
+    weekly_sla_hit_rate = []
+    for week in sorted(weekly_sla_buckets.keys()):
+        bucket = weekly_sla_buckets[week]
+        total = bucket["total"]
+        rate = round(bucket["within"] / total * 100, 1) if total else 0.0
+        weekly_sla_hit_rate.append(
+            {
+                "week": week,
+                "within_sla": bucket["within"],
+                "fulfilled": total,
+                "hit_rate": rate,
+            }
+        )
+
+    sla_trend_direction = "flat"
+    sla_trend_delta = 0.0
+    if len(weekly_sla_hit_rate) >= 2:
+        sla_trend_delta = round(
+            weekly_sla_hit_rate[-1]["hit_rate"] - weekly_sla_hit_rate[0]["hit_rate"],
+            1,
+        )
+        if sla_trend_delta >= 5:
+            sla_trend_direction = "improving"
+        elif sla_trend_delta <= -5:
+            sla_trend_direction = "regressing"
+
     # --- SLA recommendation (answers: what should our household target be?) ---
     recommended_sla_days: int | None = None
     recommended_sla_within_rate: float | None = None
@@ -313,6 +356,9 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         "by_media_type": by_media_type,
         "monthly_volume": monthly_volume,
         "weekly_throughput": weekly_throughput,
+        "weekly_sla_hit_rate": weekly_sla_hit_rate,
+        "sla_trend_delta": sla_trend_delta,
+        "sla_trend_direction": sla_trend_direction,
         "total_supporters_ever": total_supporters_ever,
         "avg_supporters_per_request": avg_supporters_per_request,
     }

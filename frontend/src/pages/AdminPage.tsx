@@ -1217,6 +1217,51 @@ export default function AdminPage() {
           </div>
 
           <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
+            <h3 className="text-white font-semibold">SLA Momentum (last 8 weeks)</h3>
+            <p className="text-sm text-slate-400">Track whether SLA hit rate is improving or slipping week-to-week before changing policy.</p>
+
+            {slaAnalytics && slaAnalytics.weekly_sla_hit_rate.length > 0 ? (
+              <>
+                <div className={`rounded border px-3 py-2 text-sm ${
+                  slaAnalytics.sla_trend_direction === 'improving'
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                    : slaAnalytics.sla_trend_direction === 'regressing'
+                    ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                    : 'border-slate-700 bg-slate-800/60 text-slate-300'
+                }`}>
+                  Trend: <span className="font-semibold capitalize">{slaAnalytics.sla_trend_direction}</span>
+                  {' '}({slaAnalytics.sla_trend_delta > 0 ? '+' : ''}{slaAnalytics.sla_trend_delta} pts from oldest to newest week)
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[640px]">
+                    <thead>
+                      <tr className="border-b border-slate-700 text-slate-400 text-sm">
+                        <th className="text-left px-3 py-2">Week</th>
+                        <th className="text-left px-3 py-2">Within SLA</th>
+                        <th className="text-left px-3 py-2">Fulfilled</th>
+                        <th className="text-left px-3 py-2">Hit Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {slaAnalytics.weekly_sla_hit_rate.map((row) => (
+                        <tr key={row.week} className="border-b border-slate-800">
+                          <td className="px-3 py-2 text-sm text-white">{row.week}</td>
+                          <td className="px-3 py-2 text-sm text-slate-300">{row.within_sla}</td>
+                          <td className="px-3 py-2 text-sm text-slate-300">{row.fulfilled}</td>
+                          <td className="px-3 py-2 text-sm text-slate-200">{row.hit_rate}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-slate-400">No weekly SLA history yet, fulfill a few requests to unlock momentum tracking.</p>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
             <h3 className="text-white font-semibold">Media-type SLA Insights</h3>
             <p className="text-sm text-slate-400">Use this to decide whether one global SLA is fair for movies, shows, and books, before changing household policy.</p>
 

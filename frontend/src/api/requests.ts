@@ -193,6 +193,14 @@ export interface AdminAnalytics {
   by_media_type: { media_type: string; total: number; fulfilled: number }[]
   monthly_volume: { month: string; submitted: number; fulfilled: number }[]
   weekly_throughput: { week: string; fulfilled: number }[]
+  weekly_sla_hit_rate: {
+    week: string
+    within_sla: number
+    fulfilled: number
+    hit_rate: number
+  }[]
+  sla_trend_delta: number
+  sla_trend_direction: 'improving' | 'flat' | 'regressing'
   total_supporters_ever: number
   avg_supporters_per_request: number
 }
