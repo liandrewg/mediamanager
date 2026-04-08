@@ -19,6 +19,44 @@ class NotificationResponse(BaseModel):
     created_at: str
 
 
+class NotificationSummaryResponse(BaseModel):
+    total: int
+    unread: int
+    by_type: dict[str, int]
+
+
+@router.get("/summary", response_model=NotificationSummaryResponse)
+async def get_notification_summary(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    rows = db.execute(
+        """
+        SELECT type, COUNT(*) as total, SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread
+        FROM request_notifications
+        WHERE user_id = ?
+        GROUP BY type
+        """,
+        (user["user_id"],),
+    ).fetchall()
+
+    by_type: dict[str, int] = {}
+    total = 0
+    unread = 0
+    for row in rows:
+        row_total = int(row["total"] or 0)
+        row_unread = int(row["unread"] or 0)
+        by_type[row["type"]] = row_unread
+        total += row_total
+        unread += row_unread
+
+    return {
+        "total": total,
+        "unread": unread,
+        "by_type": by_type,
+    }
+
+
 @router.get("", response_model=list[NotificationResponse])
 async def list_notifications(
     user: dict = Depends(get_current_user),

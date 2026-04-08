@@ -117,7 +117,7 @@ export default function MyRequestsPage() {
       {!isLoading && requests.length > 0 && (
         <div className="md:hidden space-y-3">
           {requests.map((req: any) => (
-            <div key={req.id} className="bg-slate-800 rounded-lg p-4 space-y-2">
+            <div key={req.id} id={`request-${req.id}`} className="bg-slate-800 rounded-lg p-4 space-y-2 scroll-mt-24">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm font-medium text-white">{req.title}</p>
@@ -184,7 +184,7 @@ export default function MyRequestsPage() {
               <tbody>
                 {requests.map((req: any) => (
                   <>
-                    <tr key={req.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                    <tr id={`request-${req.id}`} key={req.id} className="border-b border-slate-700/50 hover:bg-slate-700/30 scroll-mt-24">
                       <td className="px-4 py-3 text-white text-sm">{req.title}</td>
                       <td className="px-4 py-3 text-slate-400 text-sm uppercase">{req.media_type}</td>
                       <td className="px-4 py-3">

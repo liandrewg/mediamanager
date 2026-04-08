@@ -1,18 +1,26 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
+import { getNotificationSummary } from '../api/notifications'
 
 const navItems = [
   { to: '/', label: 'Dashboard' },
   { to: '/search', label: 'Search' },
   { to: '/library', label: 'Library' },
   { to: '/my-requests', label: 'My Requests' },
+  { to: '/notifications', label: 'Updates' },
   { to: '/report', label: 'Report Issue' },
 ]
 
 export default function Layout() {
   const { user, logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
+  const { data: notificationSummary } = useQuery({
+    queryKey: ['notificationSummary'],
+    queryFn: getNotificationSummary,
+    refetchInterval: 30000,
+  })
 
   const closeMenu = () => setMenuOpen(false)
 
@@ -37,7 +45,14 @@ export default function Layout() {
             className={linkClass}
             onClick={closeMenu}
           >
-            {item.label}
+            <span className="flex items-center justify-between gap-3">
+              <span>{item.label}</span>
+              {item.to === '/notifications' && (notificationSummary?.unread || 0) > 0 && (
+                <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-300">
+                  {notificationSummary?.unread}
+                </span>
+              )}
+            </span>
           </NavLink>
         ))}
         {user?.is_admin && (

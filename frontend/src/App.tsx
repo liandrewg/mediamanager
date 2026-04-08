@@ -8,6 +8,7 @@ import SearchPage from './pages/SearchPage'
 import MediaDetailPage from './pages/MediaDetailPage'
 import LibraryPage from './pages/LibraryPage'
 import MyRequestsPage from './pages/MyRequestsPage'
+import NotificationsPage from './pages/NotificationsPage'
 import AdminPage from './pages/AdminPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import ReportPage from './pages/ReportPage'
@@ -26,6 +27,7 @@ function App() {
           <Route path="/book/:workId" element={<BookDetailPage />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/my-requests" element={<MyRequestsPage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/report" element={<ReportPage />} />
           <Route element={<AdminRoute />}>
             <Route path="/admin" element={<AdminPage />} />
