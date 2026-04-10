@@ -56,6 +56,13 @@ export interface RequestRecord {
   priority_score: number
   queue_position?: number | null
   queue_size?: number | null
+  queue_ahead_count?: number | null
+  approved_ahead_count?: number | null
+  pending_ahead_count?: number | null
+  supporters_ahead_count?: number | null
+  queue_band?: 'up_next' | 'near_front' | 'in_pack' | 'long_tail' | null
+  queue_reason?: string | null
+  blocker_label?: string | null
   next_step_label?: string | null
   next_step_by?: string | null
   eta_label?: string | null

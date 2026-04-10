@@ -53,6 +53,43 @@ function EtaHint({ req }: { req: any }) {
   )
 }
 
+function QueueTransparency({ req }: { req: any }) {
+  if (!req.queue_reason && !req.blocker_label && !req.queue_position) return null
+
+  const bandStyles = {
+    up_next: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
+    near_front: 'bg-blue-500/15 text-blue-300 border border-blue-500/30',
+    in_pack: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
+    long_tail: 'bg-slate-700 text-slate-300 border border-slate-600',
+  } as const
+
+  const bandLabels = {
+    up_next: 'Up next',
+    near_front: 'Near front',
+    in_pack: 'Middle pack',
+    long_tail: 'Later queue',
+  } as const
+
+  const band = req.queue_band && bandLabels[req.queue_band as keyof typeof bandLabels]
+    ? req.queue_band as keyof typeof bandLabels
+    : 'long_tail'
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${bandStyles[band]}`}>
+          {bandLabels[band]}
+        </span>
+        {req.queue_position && req.queue_size && (
+          <span className="text-xs text-slate-400">Queue #{req.queue_position} of {req.queue_size}</span>
+        )}
+      </div>
+      {req.queue_reason && <p className="text-xs text-slate-300">{req.queue_reason}</p>}
+      {req.blocker_label && <p className="text-xs text-slate-500">{req.blocker_label}</p>}
+    </div>
+  )
+}
+
 export default function MyRequestsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
@@ -131,9 +168,7 @@ export default function MyRequestsPage() {
                 <p className="text-xs text-slate-400 italic border-l-2 border-slate-600 pl-2">{req.admin_note}</p>
               )}
               <p className="text-xs text-slate-500">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
-              {req.queue_position && req.queue_size && (
-                <p className="text-xs text-slate-500">Queue position: #{req.queue_position} of {req.queue_size}</p>
-              )}
+              <QueueTransparency req={req} />
               <NextStepHint req={req} />
               <EtaHint req={req} />
               <div className="flex items-center gap-3 flex-wrap">
@@ -198,9 +233,11 @@ export default function MyRequestsPage() {
                         {req.next_step_label ? (
                           <div>
                             <div>{req.next_step_label}</div>
-                            {req.queue_position && req.queue_size && (
-                              <div className="text-slate-500 mt-0.5">Queue #{req.queue_position}/{req.queue_size}</div>
-                            )}
+                            <div className="text-slate-500 mt-0.5">
+                              {req.queue_position && req.queue_size ? `Queue #${req.queue_position}/${req.queue_size}` : 'Queue details unavailable'}
+                            </div>
+                            {req.queue_reason && <div className="text-slate-400 mt-0.5">{req.queue_reason}</div>}
+                            {req.blocker_label && <div className="text-slate-500 mt-0.5">{req.blocker_label}</div>}
                             {req.eta_label && (
                               <div className="text-emerald-300 mt-0.5">
                                 ETA: {req.eta_label}

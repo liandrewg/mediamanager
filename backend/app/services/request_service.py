@@ -52,6 +52,13 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
     req["priority_score"] = round((req["supporter_count"] * 3) + min(days_open, 30), 1)
     req["queue_position"] = None
     req["queue_size"] = None
+    req["queue_ahead_count"] = None
+    req["approved_ahead_count"] = None
+    req["pending_ahead_count"] = None
+    req["supporters_ahead_count"] = None
+    req["queue_band"] = None
+    req["queue_reason"] = None
+    req["blocker_label"] = None
     req["next_step_label"] = None
     req["next_step_by"] = None
 
@@ -186,6 +193,55 @@ def _build_next_step_hint(
         return ("Denied, request a similar title to reopen demand", None)
 
     return (None, None)
+
+
+def _build_queue_transparency_context(open_rows: list[sqlite3.Row]) -> dict[int, dict]:
+    queue_size = len(open_rows)
+    contexts: dict[int, dict] = {}
+
+    for idx, row in enumerate(open_rows):
+        request_id = row["id"]
+        queue_position = idx + 1
+        ahead_rows = open_rows[:idx]
+        ahead_count = len(ahead_rows)
+        approved_ahead = sum(1 for ahead in ahead_rows if ahead["status"] == "approved")
+        pending_ahead = ahead_count - approved_ahead
+        supporters_ahead = sum(int(ahead["supporter_count"] or 0) for ahead in ahead_rows)
+
+        if queue_position == 1:
+            queue_band = "up_next"
+            queue_reason = "You are first in line right now."
+        elif queue_position <= 3:
+            queue_band = "near_front"
+            queue_reason = f"Only {ahead_count} request{'s' if ahead_count != 1 else ''} ahead of you."
+        elif queue_position <= max(5, math.ceil(queue_size * 0.35)):
+            queue_band = "in_pack"
+            queue_reason = f"Mid-pack, with {ahead_count} requests ahead of you."
+        else:
+            queue_band = "long_tail"
+            queue_reason = f"Lower in the household queue, with {ahead_count} requests ahead of you."
+
+        blocker_bits: list[str] = []
+        if approved_ahead:
+            blocker_bits.append(f"{approved_ahead} already approved")
+        if pending_ahead:
+            blocker_bits.append(f"{pending_ahead} still waiting for review")
+        if supporters_ahead:
+            blocker_bits.append(f"{supporters_ahead} total supporters ahead")
+
+        contexts[request_id] = {
+            "queue_position": queue_position,
+            "queue_size": queue_size,
+            "queue_ahead_count": ahead_count,
+            "approved_ahead_count": approved_ahead,
+            "pending_ahead_count": pending_ahead,
+            "supporters_ahead_count": supporters_ahead,
+            "queue_band": queue_band,
+            "queue_reason": queue_reason,
+            "blocker_label": "Ahead of you: " + ", ".join(blocker_bits) if blocker_bits else None,
+        }
+
+    return contexts
 
 
 def _create_request_notifications(
@@ -690,16 +746,14 @@ def get_user_requests(
         ORDER BY supporter_count DESC, r.created_at ASC, r.id ASC
         """
     ).fetchall()
-    queue_positions = {row["id"]: idx + 1 for idx, row in enumerate(open_rows)}
-    queue_size = len(open_rows)
+    queue_context = _build_queue_transparency_context(open_rows)
 
     policy = get_sla_policy(conn)
     median_fulfillment_days = _estimate_median_fulfillment_days(conn)
     fulfillment_window = _estimate_fulfillment_window(conn)
     for req in items:
         if req.get("status") in OPEN_REQUEST_STATUSES:
-            req["queue_position"] = queue_positions.get(req["id"])
-            req["queue_size"] = queue_size
+            req.update(queue_context.get(req["id"], {}))
         label, next_step_by = _build_next_step_hint(
             req=req,
             policy_target_days=policy["target_days"],
