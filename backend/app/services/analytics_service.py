@@ -67,6 +67,101 @@ def get_sla_target_simulation(
         conn.row_factory = original_factory
 
 
+def _build_sla_policy_advisor(
+    *,
+    sla_days: int,
+    lead_times: list[float],
+    open_count: int,
+    open_breaching_sla: int,
+    open_due_soon: int,
+    recommended_sla_days: int | None,
+    fulfilled_within_sla_rate: float,
+    sla_trend_direction: str,
+    sla_trend_delta: float,
+) -> dict:
+    sample_size = len(lead_times)
+    if sample_size < 3 or recommended_sla_days is None:
+        reasons = []
+        if sample_size < 3:
+            reasons.append(f"Only {sample_size} fulfilled requests in history, not enough household signal yet.")
+        if recommended_sla_days is None:
+            reasons.append("No reliable recommended target is available yet.")
+        if open_count > 0:
+            reasons.append(f"Current queue still has {open_breaching_sla} breached and {open_due_soon} due-soon requests to watch.")
+        return {
+            "recommended_action": "hold",
+            "suggested_target_days": sla_days,
+            "confidence": "low",
+            "summary": "Keep the current SLA for now, the history is still too thin to change household policy with confidence.",
+            "reasons": reasons,
+            "review_trigger": "Review again after at least 3 fulfilled requests and another week of queue activity.",
+            "sample_size": sample_size,
+        }
+
+    difference = recommended_sla_days - sla_days
+    breach_pressure = (open_breaching_sla / open_count) if open_count else 0.0
+
+    action = "hold"
+    confidence = "medium"
+    reasons: list[str] = []
+
+    if difference >= 2 and (fulfilled_within_sla_rate < 70.0 or breach_pressure >= 0.25):
+        action = "relax"
+        confidence = "high" if fulfilled_within_sla_rate < 60.0 or breach_pressure >= 0.4 else "medium"
+        reasons.append(
+            f"Current {sla_days}d policy is outrunning reality, only {fulfilled_within_sla_rate}% of fulfilled requests land inside it."
+        )
+        if open_breaching_sla > 0:
+            reasons.append(
+                f"{open_breaching_sla} open requests are already breaching the current promise, which creates update-chasing and admin churn."
+            )
+    elif difference <= -1 and fulfilled_within_sla_rate >= 85.0 and open_breaching_sla == 0 and sla_trend_direction != "regressing":
+        action = "tighten"
+        confidence = "high" if fulfilled_within_sla_rate >= 92.0 else "medium"
+        reasons.append(
+            f"The queue is comfortably beating the current {sla_days}d policy with a {fulfilled_within_sla_rate}% hit rate."
+        )
+        reasons.append("There are no currently breached requests dragging the promise behind reality.")
+    else:
+        reasons.append(
+            f"The current {sla_days}d policy is close to the modeled household target of {recommended_sla_days}d."
+        )
+        if open_breaching_sla > 0:
+            reasons.append(
+                f"There are still {open_breaching_sla} breached requests, so enforcement matters more than policy churn right now."
+            )
+        if sla_trend_direction == "regressing":
+            reasons.append(
+                f"Weekly SLA momentum is regressing ({sla_trend_delta:+.1f} pts), so I would stabilize operations before tightening anything."
+            )
+        elif sla_trend_direction == "improving":
+            reasons.append(
+                f"Weekly SLA momentum is improving ({sla_trend_delta:+.1f} pts), so the current target is getting healthier without a policy rewrite."
+            )
+
+    suggested_target_days = recommended_sla_days if action in {"tighten", "relax"} else sla_days
+    summary_map = {
+        "tighten": f"Tighten the household SLA to {recommended_sla_days} days. The queue is already hitting that pace consistently.",
+        "relax": f"Relax the household SLA to {recommended_sla_days} days. The current promise is creating avoidable misses.",
+        "hold": f"Hold the household SLA at {sla_days} days for now. The bigger win is enforcing the queue, not changing the number.",
+    }
+    review_trigger = (
+        "Review again after 5 more fulfilled requests or if breached requests change by 3+ items."
+        if confidence != "low"
+        else "Review again once the fulfillment sample is larger."
+    )
+
+    return {
+        "recommended_action": action,
+        "suggested_target_days": suggested_target_days,
+        "confidence": confidence,
+        "summary": summary_map[action],
+        "reasons": reasons,
+        "review_trigger": review_trigger,
+        "sample_size": sample_size,
+    }
+
+
 def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     # --- Summary KPIs ---
     total_requests_all_time = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
@@ -328,6 +423,18 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
     if total_requests_all_time > 0:
         avg_supporters_per_request = round(total_supporters_ever / total_requests_all_time, 2)
 
+    sla_policy_advisor = _build_sla_policy_advisor(
+        sla_days=sla_days,
+        lead_times=lead_times,
+        open_count=open_count,
+        open_breaching_sla=open_breaching_sla,
+        open_due_soon=open_due_soon,
+        recommended_sla_days=recommended_sla_days,
+        fulfilled_within_sla_rate=fulfilled_within_sla_rate,
+        sla_trend_direction=sla_trend_direction,
+        sla_trend_delta=sla_trend_delta,
+    )
+
     return {
         "total_requests_all_time": total_requests_all_time,
         "fulfilled_all_time": fulfilled_all_time,
@@ -359,6 +466,7 @@ def _compute_analytics(conn: sqlite3.Connection, sla_days: int) -> dict:
         "weekly_sla_hit_rate": weekly_sla_hit_rate,
         "sla_trend_delta": sla_trend_delta,
         "sla_trend_direction": sla_trend_direction,
+        "sla_policy_advisor": sla_policy_advisor,
         "total_supporters_ever": total_supporters_ever,
         "avg_supporters_per_request": avg_supporters_per_request,
     }

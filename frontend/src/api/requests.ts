@@ -208,6 +208,15 @@ export interface AdminAnalytics {
   }[]
   sla_trend_delta: number
   sla_trend_direction: 'improving' | 'flat' | 'regressing'
+  sla_policy_advisor: {
+    recommended_action: 'tighten' | 'hold' | 'relax'
+    suggested_target_days: number | null
+    confidence: 'low' | 'medium' | 'high'
+    summary: string
+    reasons: string[]
+    review_trigger: string
+    sample_size: number
+  }
   total_supporters_ever: number
   avg_supporters_per_request: number
 }

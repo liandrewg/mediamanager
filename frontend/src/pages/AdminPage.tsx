@@ -414,6 +414,13 @@ export default function AdminPage() {
   }
 
   const trimmedSlaRecommendedWarningOverride = slaRecommendedWarningOverride.trim()
+  const slaAdvisor = slaAnalytics?.sla_policy_advisor
+  const slaAdvisorTone =
+    slaAdvisor?.recommended_action === 'tighten'
+      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100'
+      : slaAdvisor?.recommended_action === 'relax'
+      ? 'border-amber-500/40 bg-amber-500/10 text-amber-100'
+      : 'border-slate-700 bg-slate-800/60 text-slate-200'
   const hasSlaRecommendedWarningOverride = trimmedSlaRecommendedWarningOverride !== ''
   const parsedSlaRecommendedWarningOverride =
     hasSlaRecommendedWarningOverride ? Number(trimmedSlaRecommendedWarningOverride) : null
@@ -1118,6 +1125,65 @@ export default function AdminPage() {
                 </p>
               )}
             </div>
+          </div>
+
+          <div className={`rounded-lg border p-4 space-y-3 ${slaAdvisorTone}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-white">Household SLA Advisor</h3>
+                <p className="text-sm opacity-90 mt-1">{slaAdvisor?.summary || 'Loading advisor...'}</p>
+              </div>
+              {slaAdvisor && (
+                <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-wide">
+                  <span className="rounded-full bg-slate-950/30 px-2 py-1 text-white/90">{slaAdvisor.recommended_action}</span>
+                  <span className="rounded-full bg-slate-950/30 px-2 py-1 text-white/90">{slaAdvisor.confidence} confidence</span>
+                  <span className="rounded-full bg-slate-950/30 px-2 py-1 text-white/90">{slaAdvisor.sample_size} fulfilled</span>
+                </div>
+              )}
+            </div>
+
+            {slaAdvisor && (
+              <>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded border border-white/10 bg-slate-950/20 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-300">Current policy</p>
+                    <p className="mt-1 text-lg font-semibold text-white">{slaPolicy?.target_days ?? slaAnalytics?.sla_days}d</p>
+                  </div>
+                  <div className="rounded border border-white/10 bg-slate-950/20 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-300">Suggested target</p>
+                    <p className="mt-1 text-lg font-semibold text-white">{slaAdvisor.suggested_target_days ?? '—'}{slaAdvisor.suggested_target_days ? 'd' : ''}</p>
+                  </div>
+                  <div className="rounded border border-white/10 bg-slate-950/20 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-300">Review trigger</p>
+                    <p className="mt-1 text-sm text-slate-100">{slaAdvisor.review_trigger}</p>
+                  </div>
+                </div>
+
+                <ul className="space-y-2 text-sm text-slate-100/90">
+                  {slaAdvisor.reasons.map((reason, index) => (
+                    <li key={`${index}-${reason}`} className="flex gap-2">
+                      <span className="mt-0.5 text-slate-300">•</span>
+                      <span>{reason}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                {slaAdvisor.suggested_target_days !== null && slaAdvisor.suggested_target_days !== slaTargetDays && (
+                  <div>
+                    <button
+                      onClick={() => applySimulatedPolicy({
+                        target_days: slaAdvisor.suggested_target_days!,
+                        warning_days: Math.min(Math.max(slaAdvisor.suggested_target_days! - 2, 0), Math.max(slaAdvisor.suggested_target_days! - 1, 0)),
+                      } as SlaSimulationScenario)}
+                      disabled={saveSlaPolicyMutation.isPending}
+                      className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-sm text-white font-medium"
+                    >
+                      Apply advisor target
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">

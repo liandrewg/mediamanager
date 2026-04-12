@@ -136,6 +136,44 @@ class AnalyticsSlaTests(unittest.TestCase):
         self.assertEqual(tv["recommended_target_days"], 10)
         self.assertEqual(tv["open_count"], 0)
 
+    def test_sla_policy_advisor_holds_when_history_is_thin(self):
+        analytics = get_analytics(self.conn, sla_days=7)
+
+        advisor = analytics["sla_policy_advisor"]
+        self.assertEqual(advisor["recommended_action"], "hold")
+        self.assertEqual(advisor["confidence"], "low")
+        self.assertEqual(advisor["suggested_target_days"], 7)
+        self.assertGreaterEqual(len(advisor["reasons"]), 1)
+
+    def test_sla_policy_advisor_recommends_relax_when_policy_is_unrealistic(self):
+        now = datetime.now(timezone.utc)
+        for offset_days, fulfilled_after_days in ((40, 14), (30, 13), (20, 12), (10, 11)):
+            created_at = (now - timedelta(days=offset_days)).isoformat()
+            fulfilled_at = (now - timedelta(days=max(offset_days - fulfilled_after_days, 0))).isoformat()
+            self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'movie', ?, 'fulfilled', ?, ?)
+                """,
+                (f'u-relax-{offset_days}', f'user{offset_days}', 2000 + offset_days, f'Relax {offset_days}', created_at, fulfilled_at),
+            )
+            request_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self.conn.execute(
+                """
+                INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+                VALUES (?, 'approved', 'fulfilled', 'admin', '', ?)
+                """,
+                (request_id, fulfilled_at),
+            )
+
+        self.conn.commit()
+
+        analytics = get_analytics(self.conn, sla_days=7)
+        advisor = analytics["sla_policy_advisor"]
+        self.assertEqual(advisor["recommended_action"], "relax")
+        self.assertGreater(advisor["suggested_target_days"], 7)
+        self.assertIn(advisor["confidence"], ["medium", "high"])
+
     def test_weekly_sla_momentum_reports_trend_direction(self):
         now = datetime.now(timezone.utc)
         old_created = (now - timedelta(days=30)).isoformat()
@@ -178,6 +216,38 @@ class AnalyticsSlaTests(unittest.TestCase):
         self.assertGreaterEqual(len(analytics["weekly_sla_hit_rate"]), 2)
         self.assertIn(analytics["sla_trend_direction"], ["improving", "flat", "regressing"])
         self.assertIsInstance(analytics["sla_trend_delta"], float)
+
+    def test_sla_policy_advisor_recommends_tighten_when_queue_is_outperforming_policy(self):
+        self.conn.execute("DELETE FROM request_history")
+        self.conn.execute("DELETE FROM requests")
+
+        now = datetime.now(timezone.utc)
+        for offset_days, fulfilled_after_days in ((35, 1), (28, 2), (21, 2), (14, 1)):
+            created_at = (now - timedelta(days=offset_days)).isoformat()
+            fulfilled_at = (now - timedelta(days=max(offset_days - fulfilled_after_days, 0))).isoformat()
+            self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'tv', ?, 'fulfilled', ?, ?)
+                """,
+                (f'u-tighten-{offset_days}', f'user-tighten-{offset_days}', 3000 + offset_days, f'Tighten {offset_days}', created_at, fulfilled_at),
+            )
+            request_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self.conn.execute(
+                """
+                INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+                VALUES (?, 'approved', 'fulfilled', 'admin', '', ?)
+                """,
+                (request_id, fulfilled_at),
+            )
+
+        self.conn.commit()
+
+        analytics = get_analytics(self.conn, sla_days=7)
+        advisor = analytics["sla_policy_advisor"]
+        self.assertEqual(advisor["recommended_action"], "tighten")
+        self.assertLess(advisor["suggested_target_days"], 7)
+        self.assertIn(advisor["confidence"], ["medium", "high"])
 
 
 if __name__ == "__main__":
