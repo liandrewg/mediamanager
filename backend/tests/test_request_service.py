@@ -1127,3 +1127,100 @@ class UserRequestTransparencyHintsTests(unittest.TestCase):
         self.assertEqual(item["eta_start"], "2026-03-16")
         self.assertEqual(item["eta_end"], "2026-03-16")
         self.assertEqual(item["eta_confidence"], "low")
+
+
+class RequestTimelineTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE user_roles (
+                user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                role TEXT NOT NULL
+            );
+            """
+        )
+
+        self.conn.execute(
+            """
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES ('owner-1', 'Alice', 101, 'movie', 'Arrival', 'approved', '2026-04-10T10:00:00+00:00', '2026-04-12T10:00:00+00:00')
+            """
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'owner-1', 'Alice', '2026-04-10T10:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'fan-2', 'Bob', '2026-04-10T12:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO user_roles (user_id, username, role) VALUES ('admin-1', 'Casey Admin', 'admin')"
+        )
+        self.conn.execute(
+            """
+            INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+            VALUES (1, 'pending', 'approved', 'admin-1', 'Approved for the next import batch', '2026-04-11T09:00:00+00:00')
+            """
+        )
+        self.conn.execute(
+            """
+            INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+            VALUES (1, 'approved', 'approved', 'system', '[SLA-ESCALATION] Escalated after 8 days open.', '2026-04-12T09:00:00+00:00')
+            """
+        )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_request_timeline_includes_submission_supporters_and_status_updates(self):
+        timeline = request_service.get_request_timeline(self.conn, 1)
+
+        self.assertEqual([event["event_type"] for event in timeline], [
+            "request_submitted",
+            "supporter_joined",
+            "status_changed",
+            "status_note",
+        ])
+        self.assertEqual(timeline[0]["title"], "Request submitted")
+        self.assertIn("Bob added support", timeline[1]["description"])
+        self.assertEqual(timeline[2]["actor_name"], "Casey Admin")
+        self.assertIn("Moved from pending to approved", timeline[2]["description"])
+        self.assertEqual(timeline[3]["title"], "SLA escalation recorded")
+        self.assertEqual(timeline[3]["actor_name"], "System")

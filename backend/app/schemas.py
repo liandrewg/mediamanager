@@ -63,6 +63,15 @@ class RequestUpdate(BaseModel):
     admin_note: Optional[str] = None
 
 
+class RequestTimelineEvent(BaseModel):
+    id: str
+    event_type: str
+    title: str
+    description: Optional[str] = None
+    actor_name: Optional[str] = None
+    created_at: str
+
+
 class PaginatedResponse(BaseModel):
     items: list
     total: int

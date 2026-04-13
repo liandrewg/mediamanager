@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getMyRequests, deleteRequest } from '../api/requests'
 import RequestBadge from '../components/RequestBadge'
 import RequestComments from '../components/RequestComments'
+import RequestTimeline from '../components/RequestTimeline'
 
 function WatchNowButton({ url }: { url: string }) {
   return (
@@ -93,10 +94,20 @@ function QueueTransparency({ req }: { req: any }) {
 export default function MyRequestsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
+  const [expandedTimeline, setExpandedTimeline] = useState<Set<number>>(new Set())
   const queryClient = useQueryClient()
 
   const toggleComments = (id: number) => {
     setExpandedComments((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleTimeline = (id: number) => {
+    setExpandedTimeline((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -187,12 +198,19 @@ export default function MyRequestsPage() {
                   </button>
                 )}
                 <button
+                  onClick={() => toggleTimeline(req.id)}
+                  className="text-xs text-slate-400 hover:text-cyan-400 transition-colors"
+                >
+                  {expandedTimeline.has(req.id) ? '🕒 Hide timeline' : '🕒 Timeline'}
+                </button>
+                <button
                   onClick={() => toggleComments(req.id)}
                   className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
                 >
                   {expandedComments.has(req.id) ? '▲ Hide comments' : '💬 Comments'}
                 </button>
               </div>
+              {expandedTimeline.has(req.id) && <RequestTimeline requestId={req.id} />}
               {expandedComments.has(req.id) && <RequestComments requestId={req.id} />}
             </div>
           ))}
@@ -265,6 +283,12 @@ export default function MyRequestsPage() {
                             </button>
                           ) : null}
                           <button
+                            onClick={() => toggleTimeline(req.id)}
+                            className="text-xs text-slate-400 hover:text-cyan-400 transition-colors"
+                          >
+                            {expandedTimeline.has(req.id) ? '🕒 Hide' : '🕒'}
+                          </button>
+                          <button
                             onClick={() => toggleComments(req.id)}
                             className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
                           >
@@ -277,6 +301,13 @@ export default function MyRequestsPage() {
                       <tr key={`comments-${req.id}`} className="border-b border-slate-700/50 bg-slate-800/50">
                         <td colSpan={8} className="px-4 py-2">
                           <RequestComments requestId={req.id} />
+                        </td>
+                      </tr>
+                    )}
+                    {expandedTimeline.has(req.id) && (
+                      <tr key={`timeline-${req.id}`} className="border-b border-slate-700/50 bg-slate-800/50">
+                        <td colSpan={8} className="px-4 py-2">
+                          <RequestTimeline requestId={req.id} />
                         </td>
                       </tr>
                     )}

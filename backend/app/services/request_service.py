@@ -706,6 +706,138 @@ def get_request_by_id(conn: sqlite3.Connection, request_id: int, user_id: str | 
     return None
 
 
+def _timeline_actor_name(conn: sqlite3.Connection, changed_by: str | None, fallback_username: str | None = None) -> str | None:
+    if not changed_by:
+        return fallback_username
+    if changed_by == "system":
+        return "System"
+    if fallback_username:
+        return fallback_username
+    try:
+        row = conn.execute(
+            "SELECT username FROM user_roles WHERE user_id = ?",
+            (changed_by,),
+        ).fetchone()
+        if row and row["username"]:
+            return row["username"]
+    except sqlite3.OperationalError:
+        pass
+    return changed_by
+
+
+def get_request_timeline(
+    conn: sqlite3.Connection,
+    request_id: int,
+) -> list[dict]:
+    row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+    if not row:
+        raise ValueError("Request not found")
+
+    request_row = dict(row)
+    events: list[dict] = [
+        {
+            "id": f"request-submitted-{request_id}",
+            "event_type": "request_submitted",
+            "title": "Request submitted",
+            "description": f"{request_row['username']} opened the request for {request_row['title']}",
+            "actor_name": request_row["username"],
+            "created_at": request_row["created_at"],
+        }
+    ]
+
+    try:
+        supporter_rows = conn.execute(
+            """
+            SELECT id, user_id, username, created_at
+            FROM request_supporters
+            WHERE request_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (request_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        supporter_rows = []
+
+    owner_seen = False
+    for supporter in supporter_rows:
+        if supporter["user_id"] == request_row["user_id"] and not owner_seen:
+            owner_seen = True
+            continue
+        events.append(
+            {
+                "id": f"supporter-{supporter['id']}",
+                "event_type": "supporter_joined",
+                "title": "Supporter joined",
+                "description": f"{supporter['username']} added support for this title",
+                "actor_name": supporter["username"],
+                "created_at": supporter["created_at"],
+            }
+        )
+
+    try:
+        history_rows = conn.execute(
+            """
+            SELECT id, old_status, new_status, changed_by, note, created_at
+            FROM request_history
+            WHERE request_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (request_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        history_rows = []
+
+    for history in history_rows:
+        note = (history["note"] or "").strip() or None
+        actor_name = _timeline_actor_name(conn, history["changed_by"])
+
+        if history["old_status"] != history["new_status"]:
+            title = f"Status changed to {history['new_status'].replace('_', ' ').title()}"
+            description = f"Moved from {history['old_status']} to {history['new_status']}"
+            if actor_name:
+                description += f" by {actor_name}"
+            if note:
+                description += f". {note}"
+            events.append(
+                {
+                    "id": f"history-{history['id']}",
+                    "event_type": "status_changed",
+                    "title": title,
+                    "description": description,
+                    "actor_name": actor_name,
+                    "created_at": history["created_at"],
+                }
+            )
+            continue
+
+        title = "Queue update logged"
+        if note:
+            if DUPLICATE_MERGE_MARKER in note:
+                title = "Duplicate requests merged"
+            elif SLA_ESCALATION_MARKER in note:
+                title = "SLA escalation recorded"
+            elif ESCALATION_MARKER in note:
+                title = "High-demand escalation recorded"
+            elif PENDING_REMINDER_MARKER in note:
+                title = "Pending reminder logged"
+            elif DENIED_AUTO_CLOSE_MARKER in note:
+                title = "Auto-close update logged"
+
+        events.append(
+            {
+                "id": f"history-{history['id']}",
+                "event_type": "status_note",
+                "title": title,
+                "description": note or "An internal request update was recorded.",
+                "actor_name": actor_name,
+                "created_at": history["created_at"],
+            }
+        )
+
+    events.sort(key=lambda event: (event["created_at"], event["id"]))
+    return events
+
+
 def get_user_requests(
     conn: sqlite3.Connection,
     user_id: str,

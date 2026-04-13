@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.dependencies import get_current_user
 from app.database import get_db
-from app.schemas import RequestCreate, RequestResponse, PaginatedResponse
+from app.schemas import RequestCreate, RequestResponse, PaginatedResponse, RequestTimelineEvent
 from app.services import request_service
 
 router = APIRouter()
@@ -52,6 +52,24 @@ async def get_request(
     if not result.get("user_supporting") and not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Access denied")
     return result
+
+
+@router.get("/{request_id}/timeline", response_model=list[RequestTimelineEvent])
+async def get_request_timeline(
+    request_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    result = request_service.get_request_by_id(db, request_id, user["user_id"])
+    if not result:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if not result.get("user_supporting") and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        return request_service.get_request_timeline(db, request_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.delete("/{request_id}")

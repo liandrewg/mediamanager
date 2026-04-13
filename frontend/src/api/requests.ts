@@ -24,6 +24,20 @@ export async function deleteRequest(id: number) {
   return data
 }
 
+export interface RequestTimelineEvent {
+  id: string
+  event_type: string
+  title: string
+  description?: string | null
+  actor_name?: string | null
+  created_at: string
+}
+
+export async function getRequestTimeline(requestId: number): Promise<RequestTimelineEvent[]> {
+  const { data } = await client.get(`/requests/${requestId}/timeline`)
+  return data
+}
+
 export async function getAllRequests(
   page = 1,
   limit = 20,
