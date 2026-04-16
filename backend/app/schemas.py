@@ -52,6 +52,12 @@ class RequestResponse(BaseModel):
     eta_start: Optional[str] = None
     eta_end: Optional[str] = None
     eta_confidence: Optional[str] = None
+    benchmark_label: Optional[str] = None
+    benchmark_source: Optional[str] = None
+    promise_status: Optional[str] = None
+    promise_summary: Optional[str] = None
+    follow_up_label: Optional[str] = None
+    follow_up_by: Optional[str] = None
     jellyfin_item_id: Optional[str] = None
     watch_url: Optional[str] = None
     created_at: str

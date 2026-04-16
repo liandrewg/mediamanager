@@ -1,5 +1,6 @@
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -120,6 +121,9 @@ def test_user_requests_include_queue_transparency_details():
     assert req["queue_band"] == "near_front"
     assert req["queue_reason"] == "Only 2 requests ahead of you."
     assert req["blocker_label"] == "Ahead of you: 1 already approved, 1 still waiting for review, 3 total supporters ahead"
+    assert req["promise_status"] == "breached"
+    assert req["benchmark_label"] is None
+    assert req["follow_up_label"] == "Check back if review is still pending after 7d."
 
 
 def test_first_in_line_request_gets_up_next_label():
@@ -141,3 +145,42 @@ def test_first_in_line_request_gets_up_next_label():
     assert req["queue_band"] == "up_next"
     assert req["queue_reason"] == "You are first in line right now."
     assert req["blocker_label"] is None
+    assert req["promise_status"] == "on_track"
+
+
+def test_approved_requests_get_media_type_promise_snapshot():
+    conn = make_db()
+    now = datetime.now(timezone.utc)
+    fulfilled_created = (now - timedelta(days=6)).isoformat()
+    fulfilled_at = (now - timedelta(days=4)).isoformat()
+    approved_created = (now - timedelta(days=1)).isoformat()
+    seed_request(
+        conn,
+        user_id="u1",
+        username="Alice",
+        title="Alpha",
+        status="fulfilled",
+        supporters=[("u1", "Alice")],
+        created_at=fulfilled_created,
+    )
+    conn.execute(
+        "INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at) VALUES (1, 'approved', 'fulfilled', 'admin', '', ?)",
+        (fulfilled_at,),
+    )
+    seed_request(
+        conn,
+        user_id="u2",
+        username="Bob",
+        title="Beta",
+        status="approved",
+        supporters=[("u2", "Bob")],
+        created_at=approved_created,
+    )
+
+    result = request_service.get_user_requests(conn, "u2", page=1, limit=10)
+    req = result["items"][0]
+
+    assert req["benchmark_source"] == "media_type"
+    assert req["benchmark_label"] == "MOVIE requests like this usually land in about 2d."
+    assert req["promise_status"] == "ahead"
+    assert req["follow_up_label"] == "Follow up if it slips past the typical delivery window."

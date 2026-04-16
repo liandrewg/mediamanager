@@ -155,8 +155,71 @@ def _estimate_fulfillment_window(conn: sqlite3.Connection) -> dict | None:
     }
 
 
+def _estimate_fulfillment_window_for_media_type(
+    conn: sqlite3.Connection,
+    media_type: str | None,
+) -> dict | None:
+    try:
+        rows = conn.execute(
+            """
+            SELECT r.created_at AS req_created, rh.created_at AS fulfilled_at, r.media_type AS media_type
+            FROM request_history rh
+            JOIN requests r ON r.id = rh.request_id
+            WHERE rh.new_status = 'fulfilled'
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+
+    grouped: dict[str, list[float]] = {}
+    overall: list[float] = []
+    for row in rows:
+        req_dt = _parse_request_datetime(row["req_created"])
+        ful_dt = _parse_request_datetime(row["fulfilled_at"])
+        if ful_dt < req_dt:
+            continue
+        delta = (ful_dt - req_dt).total_seconds() / 86400.0
+        overall.append(delta)
+        grouped.setdefault(row["media_type"] or "unknown", []).append(delta)
+
+    values = grouped.get(media_type or "") or overall
+    if not values:
+        return None
+
+    values = sorted(values)
+
+    def _percentile(pct: float) -> float:
+        if len(values) == 1:
+            return values[0]
+        position = (len(values) - 1) * pct
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return values[int(position)]
+        weight = position - lower
+        return values[lower] * (1 - weight) + values[upper] * weight
+
+    sample_size = len(values)
+    confidence = "high" if sample_size >= 15 else ("medium" if sample_size >= 6 else "low")
+    return {
+        "sample_size": sample_size,
+        "p50_days": _percentile(0.5),
+        "p80_days": _percentile(0.8),
+        "confidence": confidence,
+        "source": "media_type" if grouped.get(media_type or "") else "household",
+        "media_type": media_type,
+    }
+
+
 def _iso_after_days(days: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=max(days, 0))).date().isoformat()
+
+
+def _iso_from_created(created_at: str | None, total_days: int) -> str | None:
+    if not created_at:
+        return None
+    created_dt = _parse_request_datetime(created_at)
+    return (created_dt + timedelta(days=max(total_days, 0))).date().isoformat()
 
 
 def _build_next_step_hint(
@@ -193,6 +256,84 @@ def _build_next_step_hint(
         return ("Denied, request a similar title to reopen demand", None)
 
     return (None, None)
+
+
+def _apply_request_promise_context(
+    req: dict,
+    *,
+    policy_target_days: int,
+    policy_warning_days: int,
+    fulfillment_window: dict | None,
+) -> None:
+    req["benchmark_label"] = None
+    req["benchmark_source"] = None
+    req["promise_status"] = None
+    req["promise_summary"] = None
+    req["follow_up_label"] = None
+    req["follow_up_by"] = None
+
+    status = req.get("status")
+    if status == "fulfilled":
+        req["promise_status"] = "done"
+        req["promise_summary"] = "Fulfilled, no follow-up needed unless the link is missing."
+        return
+    if status == "denied":
+        req["promise_status"] = "done"
+        req["promise_summary"] = "Denied, demand is closed unless someone reopens it with a new request."
+        return
+
+    days_open = int(req.get("days_open") or 0)
+    media_label = (req.get("media_type") or "request").upper()
+
+    if fulfillment_window:
+        start_days = max(int(round(fulfillment_window["p50_days"])), 0)
+        end_days = max(int(math.ceil(fulfillment_window["p80_days"])), start_days)
+        source_prefix = media_label if fulfillment_window.get("source") == "media_type" else "Household"
+        if start_days == end_days:
+            req["benchmark_label"] = f"{source_prefix} requests like this usually land in about {end_days}d."
+        else:
+            req["benchmark_label"] = f"{source_prefix} requests like this usually land in {start_days}-{end_days}d."
+        req["benchmark_source"] = fulfillment_window.get("source")
+
+    if status == "pending":
+        warning_age = max(policy_target_days - policy_warning_days, 0)
+        req["follow_up_by"] = _iso_from_created(req.get("created_at"), policy_target_days)
+        req["follow_up_label"] = f"Check back if review is still pending after {policy_target_days}d."
+        if days_open > policy_target_days:
+            req["promise_status"] = "breached"
+            req["promise_summary"] = f"Past the household review target by {days_open - policy_target_days}d, worth nudging the queue."
+        elif days_open >= warning_age and policy_warning_days > 0:
+            req["promise_status"] = "at_risk"
+            req["promise_summary"] = "Approaching the review deadline, this one should get admin eyes soon."
+        else:
+            req["promise_status"] = "on_track"
+            req["promise_summary"] = "Still inside the normal review window."
+        return
+
+    if status != "approved":
+        return
+
+    if fulfillment_window:
+        start_days = max(int(round(fulfillment_window["p50_days"])), 0)
+        end_days = max(int(math.ceil(fulfillment_window["p80_days"])), start_days)
+        req["follow_up_by"] = _iso_from_created(req.get("created_at"), end_days)
+        req["follow_up_label"] = "Follow up if it slips past the typical delivery window."
+        if days_open <= start_days:
+            req["promise_status"] = "ahead"
+            req["promise_summary"] = "Moving faster than the typical household delivery pace so far."
+        elif days_open <= end_days:
+            req["promise_status"] = "on_track"
+            req["promise_summary"] = "Still inside the normal fulfillment window for this kind of request."
+        elif days_open <= max(end_days, policy_target_days):
+            req["promise_status"] = "at_risk"
+            req["promise_summary"] = "Slower than normal, but not fully outside the current household promise yet."
+        else:
+            req["promise_status"] = "breached"
+            req["promise_summary"] = "Past both the typical delivery window and the current household promise."
+        return
+
+    req["promise_status"] = "on_track"
+    req["promise_summary"] = "Approved and waiting for library availability."
 
 
 def _build_queue_transparency_context(open_rows: list[sqlite3.Row]) -> dict[int, dict]:
@@ -702,7 +843,23 @@ def create_request(
 def get_request_by_id(conn: sqlite3.Connection, request_id: int, user_id: str | None = None) -> dict | None:
     row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
     if row:
-        return _serialize_request(conn, row, user_id)
+        req = _serialize_request(conn, row, user_id)
+        policy = get_sla_policy(conn)
+        window = _estimate_fulfillment_window_for_media_type(conn, req.get("media_type"))
+        label, next_step_by = _build_next_step_hint(
+            req=req,
+            policy_target_days=policy["target_days"],
+            median_fulfillment_days=_estimate_median_fulfillment_days(conn),
+        )
+        req["next_step_label"] = label
+        req["next_step_by"] = next_step_by
+        _apply_request_promise_context(
+            req,
+            policy_target_days=policy["target_days"],
+            policy_warning_days=policy["warning_days"],
+            fulfillment_window=window,
+        )
+        return req
     return None
 
 
@@ -882,7 +1039,7 @@ def get_user_requests(
 
     policy = get_sla_policy(conn)
     median_fulfillment_days = _estimate_median_fulfillment_days(conn)
-    fulfillment_window = _estimate_fulfillment_window(conn)
+    fulfillment_windows: dict[str, dict | None] = {}
     for req in items:
         if req.get("status") in OPEN_REQUEST_STATUSES:
             req.update(queue_context.get(req["id"], {}))
@@ -899,6 +1056,11 @@ def get_user_requests(
         req["eta_end"] = None
         req["eta_confidence"] = None
 
+        media_type = req.get("media_type") or "unknown"
+        if media_type not in fulfillment_windows:
+            fulfillment_windows[media_type] = _estimate_fulfillment_window_for_media_type(conn, media_type)
+        fulfillment_window = fulfillment_windows[media_type]
+
         if req.get("status") == "approved" and fulfillment_window:
             remaining_start = max(int(round(fulfillment_window["p50_days"])) - req["days_open"], 0)
             remaining_end = max(int(math.ceil(fulfillment_window["p80_days"])) - req["days_open"], remaining_start)
@@ -912,6 +1074,13 @@ def get_user_requests(
                 req["eta_label"] = f"Likely available in ~{remaining_end}d"
             else:
                 req["eta_label"] = f"Likely available in {remaining_start}-{remaining_end}d"
+
+        _apply_request_promise_context(
+            req,
+            policy_target_days=policy["target_days"],
+            policy_warning_days=policy["warning_days"],
+            fulfillment_window=fulfillment_window,
+        )
 
     return {
         "items": items,

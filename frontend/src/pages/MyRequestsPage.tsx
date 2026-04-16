@@ -54,6 +54,58 @@ function EtaHint({ req }: { req: any }) {
   )
 }
 
+function PromiseSnapshot({ req }: { req: any }) {
+  if (!req.promise_summary && !req.benchmark_label && !req.follow_up_label) return null
+
+  const status: 'ahead' | 'on_track' | 'at_risk' | 'breached' | 'done' =
+    req.promise_status === 'ahead' ||
+    req.promise_status === 'on_track' ||
+    req.promise_status === 'at_risk' ||
+    req.promise_status === 'breached' ||
+    req.promise_status === 'done'
+      ? req.promise_status
+      : 'on_track'
+
+  const toneMap = {
+    ahead: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+    on_track: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200',
+    at_risk: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
+    breached: 'border-red-500/30 bg-red-500/10 text-red-200',
+    done: 'border-slate-600 bg-slate-800/80 text-slate-300',
+  } as const
+  const tone = toneMap[status]
+
+  const labelMap = {
+    ahead: 'Ahead of normal',
+    on_track: 'On track',
+    at_risk: 'Watch this one',
+    breached: 'Past promise',
+    done: 'Closed',
+  } as const
+  const label = labelMap[status]
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 space-y-1 ${tone}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
+        {req.benchmark_source && (
+          <span className="text-[11px] opacity-75">
+            {req.benchmark_source === 'media_type' ? 'Based on this media type' : 'Based on household history'}
+          </span>
+        )}
+      </div>
+      {req.promise_summary && <p className="text-xs">{req.promise_summary}</p>}
+      {req.benchmark_label && <p className="text-xs opacity-90">Normal: {req.benchmark_label}</p>}
+      {req.follow_up_label && (
+        <p className="text-xs opacity-90">
+          {req.follow_up_label}
+          {req.follow_up_by ? ` (${new Date(req.follow_up_by).toLocaleDateString()})` : ''}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function QueueTransparency({ req }: { req: any }) {
   if (!req.queue_reason && !req.blocker_label && !req.queue_position) return null
 
@@ -180,6 +232,7 @@ export default function MyRequestsPage() {
               )}
               <p className="text-xs text-slate-500">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
               <QueueTransparency req={req} />
+              <PromiseSnapshot req={req} />
               <NextStepHint req={req} />
               <EtaHint req={req} />
               <div className="flex items-center gap-3 flex-wrap">
@@ -256,6 +309,14 @@ export default function MyRequestsPage() {
                             </div>
                             {req.queue_reason && <div className="text-slate-400 mt-0.5">{req.queue_reason}</div>}
                             {req.blocker_label && <div className="text-slate-500 mt-0.5">{req.blocker_label}</div>}
+                            {req.promise_summary && <div className="text-slate-300 mt-1">{req.promise_summary}</div>}
+                            {req.benchmark_label && <div className="text-slate-500 mt-0.5">Normal: {req.benchmark_label}</div>}
+                            {req.follow_up_label && (
+                              <div className="text-slate-400 mt-0.5">
+                                {req.follow_up_label}
+                                {req.follow_up_by ? ` (${new Date(req.follow_up_by).toLocaleDateString()})` : ''}
+                              </div>
+                            )}
                             {req.eta_label && (
                               <div className="text-emerald-300 mt-0.5">
                                 ETA: {req.eta_label}

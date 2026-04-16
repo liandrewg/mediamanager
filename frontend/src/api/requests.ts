@@ -83,6 +83,12 @@ export interface RequestRecord {
   eta_start?: string | null
   eta_end?: string | null
   eta_confidence?: 'low' | 'medium' | 'high' | null
+  benchmark_label?: string | null
+  benchmark_source?: 'media_type' | 'household' | null
+  promise_status?: 'ahead' | 'on_track' | 'at_risk' | 'breached' | 'done' | null
+  promise_summary?: string | null
+  follow_up_label?: string | null
+  follow_up_by?: string | null
   jellyfin_item_id?: string | null
   watch_url?: string | null
   created_at: string
