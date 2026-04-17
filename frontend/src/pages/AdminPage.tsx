@@ -5,6 +5,7 @@ import {
   updateRequest,
   bulkUpdateRequests,
   getAdminStats,
+  getAdminReplyPack,
   getUsers,
   updateUserRole,
   getHealthCheck,
@@ -19,6 +20,7 @@ import {
   bulkEscalateSlaRequests,
   simulateSlaPolicy,
   type AdminAnalytics,
+  type AdminReplyPackItem,
   type DuplicateGroup,
   type SlaSimulationScenario,
 } from '../api/requests'
@@ -135,6 +137,12 @@ export default function AdminPage() {
   const { data: stats } = useQuery({
     queryKey: ['adminStats'],
     queryFn: getAdminStats,
+  })
+
+  const { data: replyPack } = useQuery({
+    queryKey: ['adminReplyPack'],
+    queryFn: () => getAdminReplyPack(8),
+    enabled: tab === 'requests',
   })
 
   const { data, isLoading } = useQuery({
@@ -344,6 +352,12 @@ export default function AdminPage() {
   })
 
   const allRequests: any[] = data?.items || []
+  const copyReplyNote = async (item: AdminReplyPackItem) => {
+    const detail = item.next_step_by
+      ? `${item.suggested_note}\n\nNext step: ${item.next_step_label || 'Follow up'} by ${new Date(item.next_step_by).toLocaleDateString()}.`
+      : item.suggested_note
+    await navigator.clipboard.writeText(detail)
+  }
   const minAge = ageFilter === 'all' ? 0 : Number(ageFilter)
   const displayedRequests =
     minAge === 0
@@ -708,6 +722,56 @@ export default function AdminPage() {
           {!isLoading && (stats?.open_over_7_days || 0) > 0 && (
             <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
               ⚠ Queue aging alert: {stats?.open_over_7_days || 0} open request{(stats?.open_over_7_days || 0) === 1 ? '' : 's'} over 7 days old.
+            </div>
+          )}
+
+          {!isLoading && replyPack && replyPack.summary.total > 0 && (
+            <div className="mb-6 rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4 space-y-4">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-white font-semibold">Reply Pack</h3>
+                  <p className="text-sm text-slate-300">Requests most likely to trigger DM churn unless the queue speaks first.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-red-500/15 px-2 py-1 text-red-300">{replyPack.summary.critical} critical</span>
+                  <span className="rounded-full bg-amber-500/15 px-2 py-1 text-amber-300">{replyPack.summary.high} high</span>
+                  <span className="rounded-full bg-blue-500/15 px-2 py-1 text-blue-300">{replyPack.summary.medium} medium</span>
+                </div>
+              </div>
+
+              <div className="grid gap-3 xl:grid-cols-2">
+                {replyPack.items.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-white">{item.title}</p>
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${item.urgency === 'critical' ? 'bg-red-500/15 text-red-300' : item.urgency === 'high' ? 'bg-amber-500/15 text-amber-300' : 'bg-blue-500/15 text-blue-300'}`}>
+                            {item.urgency}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">{item.username} · {item.media_type.toUpperCase()} · {item.days_open}d open · {item.supporter_count} supporter{item.supporter_count === 1 ? '' : 's'}</p>
+                      </div>
+                      <button
+                        onClick={() => copyReplyNote(item)}
+                        className="rounded bg-cyan-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-cyan-500"
+                      >
+                        Copy note
+                      </button>
+                    </div>
+                    <p className="text-sm text-slate-200">{item.reason}</p>
+                    {item.queue_reason && <p className="text-xs text-slate-400">{item.queue_reason}</p>}
+                    <div className="rounded border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-200">
+                      {item.suggested_note}
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs text-slate-400">
+                      {item.queue_position && item.queue_size && <span>Queue #{item.queue_position} of {item.queue_size}</span>}
+                      {item.next_step_label && <span>{item.next_step_label}{item.next_step_by ? ` by ${new Date(item.next_step_by).toLocaleDateString()}` : ''}</span>}
+                      {item.eta_label && <span>{item.eta_label}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

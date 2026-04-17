@@ -186,6 +186,15 @@ async def get_stats(
     return request_service.get_request_stats(db)
 
 
+@router.get("/reply-pack")
+async def get_reply_pack(
+    limit: int = Query(8, ge=1, le=25),
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    return request_service.get_admin_reply_pack(db, limit=limit)
+
+
 # --- User Management ---
 
 class RoleUpdate(BaseModel):

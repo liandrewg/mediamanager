@@ -163,6 +163,42 @@ export async function getAdminStats(): Promise<AdminStats> {
   return data
 }
 
+export interface AdminReplyPackItem {
+  id: number
+  title: string
+  status: string
+  media_type: string
+  username: string
+  supporter_count: number
+  days_open: number
+  queue_position?: number | null
+  queue_size?: number | null
+  promise_status?: string | null
+  urgency: 'critical' | 'high' | 'medium'
+  reason: string
+  queue_reason?: string | null
+  next_step_label?: string | null
+  next_step_by?: string | null
+  follow_up_by?: string | null
+  eta_label?: string | null
+  suggested_note: string
+}
+
+export interface AdminReplyPackResponse {
+  summary: {
+    critical: number
+    high: number
+    medium: number
+    total: number
+  }
+  items: AdminReplyPackItem[]
+}
+
+export async function getAdminReplyPack(limit = 8): Promise<AdminReplyPackResponse> {
+  const { data } = await client.get('/admin/reply-pack', { params: { limit } })
+  return data
+}
+
 export async function getUsers() {
   const { data } = await client.get('/admin/users')
   return data

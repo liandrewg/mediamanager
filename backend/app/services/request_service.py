@@ -385,6 +385,76 @@ def _build_queue_transparency_context(open_rows: list[sqlite3.Row]) -> dict[int,
     return contexts
 
 
+def _build_admin_reply_pack_item(req: dict) -> dict | None:
+    if req.get("status") not in OPEN_REQUEST_STATUSES:
+        return None
+
+    promise_status = req.get("promise_status") or "on_track"
+    queue_band = req.get("queue_band") or "long_tail"
+    supporters = int(req.get("supporter_count") or 0)
+    days_open = int(req.get("days_open") or 0)
+    queue_position = req.get("queue_position")
+    queue_size = req.get("queue_size")
+    next_step_by = req.get("next_step_by")
+    follow_up_by = req.get("follow_up_by")
+
+    if promise_status == "breached":
+        urgency = "critical"
+        reason = f"Past promise by {days_open}d open, this is the kind of request that causes update-chasing."
+        suggested_note = (
+            f"Update: this request is running past our normal window. You're still in queue"
+            f"{f' at #{queue_position} of {queue_size}' if queue_position and queue_size else ''}, "
+            f"and I'll post another status check{f' by {follow_up_by}' if follow_up_by else ' soon'}."
+        )
+    elif promise_status == "at_risk":
+        urgency = "high"
+        reason = "Approaching the household promise window, a proactive note now prevents DM follow-ups later."
+        suggested_note = (
+            f"Quick status: this one is still active"
+            f"{f' at queue #{queue_position} of {queue_size}' if queue_position and queue_size else ''}. "
+            f"Next step is {req.get('next_step_label') or 'admin review'}, "
+            f"and I expect another update{f' by {next_step_by}' if next_step_by else ' soon'}."
+        )
+    elif queue_band == "up_next" and req.get("status") == "approved":
+        urgency = "high"
+        reason = "Approved and effectively next up, worth sending a confidence-building status note before they ask."
+        suggested_note = (
+            f"Good news: this request is effectively next up on the household queue. "
+            f"{req.get('eta_label') or 'I expect movement soon'}, and I'll flag it again once it lands."
+        )
+    elif supporters >= 3:
+        urgency = "medium"
+        reason = f"High-demand request with {supporters} supporters, so silence here creates more repeat asks than usual."
+        suggested_note = (
+            f"Status check: {supporters} people are backing this request, so it's being treated as a priority"
+            f"{f' at queue #{queue_position} of {queue_size}' if queue_position and queue_size else ''}. "
+            f"{req.get('queue_reason') or 'It is still active in the queue.'}"
+        )
+    else:
+        return None
+
+    return {
+        "id": req["id"],
+        "title": req["title"],
+        "status": req["status"],
+        "media_type": req["media_type"],
+        "username": req["username"],
+        "supporter_count": supporters,
+        "days_open": days_open,
+        "queue_position": queue_position,
+        "queue_size": queue_size,
+        "promise_status": promise_status,
+        "urgency": urgency,
+        "reason": reason,
+        "queue_reason": req.get("queue_reason"),
+        "next_step_label": req.get("next_step_label"),
+        "next_step_by": next_step_by,
+        "follow_up_by": follow_up_by,
+        "eta_label": req.get("eta_label"),
+        "suggested_note": suggested_note,
+    }
+
+
 def _create_request_notifications(
     conn: sqlite3.Connection,
     request_id: int,
@@ -601,6 +671,81 @@ def get_sla_worklist(
         "policy": policy,
         "summary": summary,
         "state": state,
+        "items": items[:bounded_limit],
+    }
+
+
+def get_admin_reply_pack(conn: sqlite3.Connection, limit: int = 8) -> dict:
+    rows = conn.execute(
+        """
+        SELECT r.*, (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) as supporter_count
+        FROM requests r
+        WHERE r.status IN ('pending', 'approved')
+        ORDER BY supporter_count DESC, r.created_at ASC, r.id ASC
+        """
+    ).fetchall()
+
+    queue_context = _build_queue_transparency_context(rows)
+    policy = get_sla_policy(conn)
+    median_fulfillment_days = _estimate_median_fulfillment_days(conn)
+    fulfillment_windows: dict[str, dict | None] = {}
+    items: list[dict] = []
+
+    for row in rows:
+        req = _serialize_request(conn, row)
+        req.update(queue_context.get(req["id"], {}))
+        label, next_step_by = _build_next_step_hint(
+            req=req,
+            policy_target_days=policy["target_days"],
+            median_fulfillment_days=median_fulfillment_days,
+        )
+        req["next_step_label"] = label
+        req["next_step_by"] = next_step_by
+
+        media_type = req.get("media_type") or "unknown"
+        if media_type not in fulfillment_windows:
+            fulfillment_windows[media_type] = _estimate_fulfillment_window_for_media_type(conn, media_type)
+        fulfillment_window = fulfillment_windows[media_type]
+
+        if req.get("status") == "approved" and fulfillment_window:
+            remaining_start = max(int(round(fulfillment_window["p50_days"])) - req["days_open"], 0)
+            remaining_end = max(int(math.ceil(fulfillment_window["p80_days"])) - req["days_open"], remaining_start)
+            if remaining_end == 0:
+                req["eta_label"] = "Likely available any day now"
+            elif remaining_start == remaining_end:
+                req["eta_label"] = f"Likely available in ~{remaining_end}d"
+            else:
+                req["eta_label"] = f"Likely available in {remaining_start}-{remaining_end}d"
+
+        _apply_request_promise_context(
+            req,
+            policy_target_days=policy["target_days"],
+            policy_warning_days=policy["warning_days"],
+            fulfillment_window=fulfillment_window,
+        )
+
+        pack_item = _build_admin_reply_pack_item(req)
+        if pack_item:
+            items.append(pack_item)
+
+    urgency_rank = {"critical": 0, "high": 1, "medium": 2}
+    items.sort(
+        key=lambda item: (
+            urgency_rank.get(item["urgency"], 9),
+            -(item.get("supporter_count") or 0),
+            -(item.get("days_open") or 0),
+            item.get("queue_position") or 999,
+        )
+    )
+
+    bounded_limit = min(max(int(limit or 1), 1), 25)
+    return {
+        "summary": {
+            "critical": sum(1 for item in items if item["urgency"] == "critical"),
+            "high": sum(1 for item in items if item["urgency"] == "high"),
+            "medium": sum(1 for item in items if item["urgency"] == "medium"),
+            "total": len(items),
+        },
         "items": items[:bounded_limit],
     }
 
