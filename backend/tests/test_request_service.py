@@ -1224,3 +1224,130 @@ class RequestTimelineTests(unittest.TestCase):
         self.assertIn("Moved from pending to approved", timeline[2]["description"])
         self.assertEqual(timeline[3]["title"], "SLA escalation recorded")
         self.assertEqual(timeline[3]["actor_name"], "System")
+
+
+class RequesterDigestPackTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                target_days INTEGER NOT NULL DEFAULT 7 CHECK (target_days >= 1),
+                warning_days INTEGER NOT NULL DEFAULT 2 CHECK (warning_days >= 0),
+                updated_at TEXT
+            );
+
+            INSERT INTO sla_policy (id, target_days, warning_days, updated_at)
+            VALUES (1, 7, 2, '2026-04-01T00:00:00+00:00');
+            """
+        )
+
+        requests = [
+            ("u1", "alice", 101, "movie", "Late Movie", "pending", "2026-03-25T10:00:00+00:00"),
+            ("u1", "alice", 102, "tv", "Queued Show", "approved", "2026-04-05T10:00:00+00:00"),
+            ("u2", "bob", 201, "movie", "Fresh Ask", "pending", "2026-04-16T10:00:00+00:00"),
+        ]
+        for user_id, username, tmdb_id, media_type, title, status, created_at in requests:
+            cur = self.conn.execute(
+                """
+                INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, username, tmdb_id, media_type, title, status, created_at, created_at),
+            )
+            request_id = cur.lastrowid
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+                (request_id, user_id, username, created_at),
+            )
+
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'u3', 'cara', '2026-03-26T10:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (2, 'u4', 'dave', '2026-04-06T10:00:00+00:00')"
+        )
+
+        fulfilled = [
+            (10, 910, "History A", "2026-04-01T10:00:00+00:00", "2026-04-04T10:00:00+00:00"),
+            (11, 911, "History B", "2026-04-02T10:00:00+00:00", "2026-04-08T10:00:00+00:00"),
+        ]
+        for request_id, tmdb_id, title, created_at, fulfilled_at in fulfilled:
+            self.conn.execute(
+                """
+                INSERT INTO requests (id, user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+                VALUES (?, 'history-user', 'history', ?, 'movie', ?, 'fulfilled', ?, ?)
+                """,
+                (request_id, tmdb_id, title, created_at, fulfilled_at),
+            )
+            self.conn.execute(
+                "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (?, 'history-user', 'history', ?)",
+                (request_id, created_at),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+                VALUES (?, 'approved', 'fulfilled', 'admin-1', NULL, ?)
+                """,
+                (request_id, fulfilled_at),
+            )
+
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_groups_multi_request_users_into_digest_pack(self):
+        result = request_service.get_requester_digest_pack(self.conn, limit=10)
+
+        self.assertEqual(result["summary"]["total"], 1)
+        self.assertEqual(result["summary"]["critical"], 1)
+        item = result["items"][0]
+        self.assertEqual(item["username"], "alice")
+        self.assertEqual(item["open_request_count"], 2)
+        self.assertGreaterEqual(item["breached_count"], 1)
+        self.assertIn("Late Movie", item["request_titles"])
+        self.assertIn("Queued Show", item["request_titles"])
+        self.assertIn("Quick queue cleanup note", item["suggested_note"])
+
+    def test_ignores_single_low_churn_requesters(self):
+        result = request_service.get_requester_digest_pack(self.conn, limit=10)
+
+        usernames = [item["username"] for item in result["items"]]
+        self.assertNotIn("bob", usernames)

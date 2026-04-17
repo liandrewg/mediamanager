@@ -750,6 +750,160 @@ def get_admin_reply_pack(conn: sqlite3.Connection, limit: int = 8) -> dict:
     }
 
 
+def get_requester_digest_pack(conn: sqlite3.Connection, limit: int = 6) -> dict:
+    rows = conn.execute(
+        """
+        SELECT r.*, (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) as supporter_count
+        FROM requests r
+        WHERE r.status IN ('pending', 'approved')
+        ORDER BY r.username COLLATE NOCASE ASC, r.created_at ASC, r.id ASC
+        """
+    ).fetchall()
+
+    if not rows:
+        return {
+            "summary": {"critical": 0, "high": 0, "medium": 0, "total": 0},
+            "items": [],
+        }
+
+    queue_context = _build_queue_transparency_context(rows)
+    policy = get_sla_policy(conn)
+    median_fulfillment_days = _estimate_median_fulfillment_days(conn)
+    fulfillment_windows: dict[str, dict | None] = {}
+    grouped: dict[str, dict] = {}
+
+    for row in rows:
+        req = _serialize_request(conn, row)
+        req.update(queue_context.get(req["id"], {}))
+        label, next_step_by = _build_next_step_hint(
+            req=req,
+            policy_target_days=policy["target_days"],
+            median_fulfillment_days=median_fulfillment_days,
+        )
+        req["next_step_label"] = label
+        req["next_step_by"] = next_step_by
+
+        media_type = req.get("media_type") or "unknown"
+        if media_type not in fulfillment_windows:
+            fulfillment_windows[media_type] = _estimate_fulfillment_window_for_media_type(conn, media_type)
+        fulfillment_window = fulfillment_windows[media_type]
+
+        if req.get("status") == "approved" and fulfillment_window:
+            remaining_start = max(int(round(fulfillment_window["p50_days"])) - req["days_open"], 0)
+            remaining_end = max(int(math.ceil(fulfillment_window["p80_days"])) - req["days_open"], remaining_start)
+            if remaining_end == 0:
+                req["eta_label"] = "Likely available any day now"
+            elif remaining_start == remaining_end:
+                req["eta_label"] = f"Likely available in ~{remaining_end}d"
+            else:
+                req["eta_label"] = f"Likely available in {remaining_start}-{remaining_end}d"
+
+        _apply_request_promise_context(
+            req,
+            policy_target_days=policy["target_days"],
+            policy_warning_days=policy["warning_days"],
+            fulfillment_window=fulfillment_window,
+        )
+
+        bucket = grouped.setdefault(
+            req["user_id"],
+            {
+                "user_id": req["user_id"],
+                "username": req["username"],
+                "requests": [],
+            },
+        )
+        bucket["requests"].append(req)
+
+    items: list[dict] = []
+    urgency_rank = {"critical": 0, "high": 1, "medium": 2}
+
+    for bucket in grouped.values():
+        requests = bucket["requests"]
+        open_count = len(requests)
+        breached = [req for req in requests if req.get("promise_status") == "breached"]
+        at_risk = [req for req in requests if req.get("promise_status") == "at_risk"]
+        approved = [req for req in requests if req.get("status") == "approved"]
+        total_supporters = sum(int(req.get("supporter_count") or 0) for req in requests)
+
+        if breached:
+            urgency = "critical"
+            reason = f"{bucket['username']} has {len(breached)} request{'s' if len(breached) != 1 else ''} past the promise window, which is prime DM-churn territory."
+        elif at_risk or open_count >= 3:
+            urgency = "high"
+            reason = f"{bucket['username']} has {open_count} open requests, so one batched update is cheaper than repeat follow-up pings."
+        elif open_count >= 2 or total_supporters >= 4:
+            urgency = "medium"
+            reason = f"{bucket['username']} has enough open queue weight that a consolidated update will save future status asks."
+        else:
+            continue
+
+        request_lines: list[str] = []
+        for req in requests[:4]:
+            parts = [f"{req['title']} ({req['status']})"]
+            if req.get("queue_position") and req.get("queue_size"):
+                parts.append(f"queue #{req['queue_position']} of {req['queue_size']}")
+            if req.get("eta_label"):
+                parts.append(req["eta_label"])
+            elif req.get("next_step_label"):
+                parts.append(req["next_step_label"])
+            elif req.get("promise_summary"):
+                parts.append(req["promise_summary"])
+            request_lines.append("- " + "; ".join(parts))
+
+        overflow = open_count - len(request_lines)
+        if overflow > 0:
+            request_lines.append(f"- Plus {overflow} more open request{'s' if overflow != 1 else ''} still active in the queue.")
+
+        if breached:
+            opener = f"Quick queue cleanup note for your {open_count} open requests. A couple have drifted past the normal window, but they're still active and being pushed forward:"
+        elif approved and len(approved) == open_count:
+            opener = f"Quick queue update for your {open_count} approved request{'s' if open_count != 1 else ''}. Everything is still live, here’s the current read:"
+        else:
+            opener = f"Quick batched update for your {open_count} open request{'s' if open_count != 1 else ''}, so you don't have to chase them one by one:"
+
+        suggested_note = opener + "\n" + "\n".join(request_lines) + "\n- I’ll keep the queue updated as statuses change."
+
+        items.append(
+            {
+                "user_id": bucket["user_id"],
+                "username": bucket["username"],
+                "urgency": urgency,
+                "reason": reason,
+                "open_request_count": open_count,
+                "breached_count": len(breached),
+                "at_risk_count": len(at_risk),
+                "approved_count": len(approved),
+                "pending_count": sum(1 for req in requests if req.get("status") == "pending"),
+                "total_supporters": total_supporters,
+                "request_titles": [req["title"] for req in requests],
+                "requests": requests,
+                "suggested_note": suggested_note,
+            }
+        )
+
+    items.sort(
+        key=lambda item: (
+            urgency_rank.get(item["urgency"], 9),
+            -item["breached_count"],
+            -item["open_request_count"],
+            -item["total_supporters"],
+            item["username"].casefold(),
+        )
+    )
+
+    bounded_limit = min(max(int(limit or 1), 1), 25)
+    return {
+        "summary": {
+            "critical": sum(1 for item in items if item["urgency"] == "critical"),
+            "high": sum(1 for item in items if item["urgency"] == "high"),
+            "medium": sum(1 for item in items if item["urgency"] == "medium"),
+            "total": len(items),
+        },
+        "items": items[:bounded_limit],
+    }
+
+
 def bulk_escalate_sla_breaches(
     conn: sqlite3.Connection,
     request_ids: list[int],

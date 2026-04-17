@@ -6,6 +6,7 @@ import {
   bulkUpdateRequests,
   getAdminStats,
   getAdminReplyPack,
+  getRequesterDigestPack,
   getUsers,
   updateUserRole,
   getHealthCheck,
@@ -22,6 +23,7 @@ import {
   type AdminAnalytics,
   type AdminReplyPackItem,
   type DuplicateGroup,
+  type RequesterDigestPackItem,
   type SlaSimulationScenario,
 } from '../api/requests'
 import { getAllBacklog, updateBacklogItem, deleteBacklogItem, getBacklogStats } from '../api/backlog'
@@ -142,6 +144,12 @@ export default function AdminPage() {
   const { data: replyPack } = useQuery({
     queryKey: ['adminReplyPack'],
     queryFn: () => getAdminReplyPack(8),
+    enabled: tab === 'requests',
+  })
+
+  const { data: requesterDigestPack } = useQuery({
+    queryKey: ['requesterDigestPack'],
+    queryFn: () => getRequesterDigestPack(6),
     enabled: tab === 'requests',
   })
 
@@ -357,6 +365,9 @@ export default function AdminPage() {
       ? `${item.suggested_note}\n\nNext step: ${item.next_step_label || 'Follow up'} by ${new Date(item.next_step_by).toLocaleDateString()}.`
       : item.suggested_note
     await navigator.clipboard.writeText(detail)
+  }
+  const copyRequesterDigestNote = async (item: RequesterDigestPackItem) => {
+    await navigator.clipboard.writeText(item.suggested_note)
   }
   const minAge = ageFilter === 'all' ? 0 : Number(ageFilter)
   const displayedRequests =
@@ -768,6 +779,74 @@ export default function AdminPage() {
                       {item.queue_position && item.queue_size && <span>Queue #{item.queue_position} of {item.queue_size}</span>}
                       {item.next_step_label && <span>{item.next_step_label}{item.next_step_by ? ` by ${new Date(item.next_step_by).toLocaleDateString()}` : ''}</span>}
                       {item.eta_label && <span>{item.eta_label}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!isLoading && requesterDigestPack && requesterDigestPack.summary.total > 0 && (
+            <div className="mb-6 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4 space-y-4">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-white font-semibold">Requester Digest Pack</h3>
+                  <p className="text-sm text-slate-300">Batch the people with multiple live asks into one clean status note instead of playing DM whack-a-mole.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-red-500/15 px-2 py-1 text-red-300">{requesterDigestPack.summary.critical} critical</span>
+                  <span className="rounded-full bg-amber-500/15 px-2 py-1 text-amber-300">{requesterDigestPack.summary.high} high</span>
+                  <span className="rounded-full bg-blue-500/15 px-2 py-1 text-blue-300">{requesterDigestPack.summary.medium} medium</span>
+                </div>
+              </div>
+
+              <div className="grid gap-3 xl:grid-cols-2">
+                {requesterDigestPack.items.map((item) => (
+                  <div key={item.user_id} className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-white">{item.username}</p>
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${item.urgency === 'critical' ? 'bg-red-500/15 text-red-300' : item.urgency === 'high' ? 'bg-amber-500/15 text-amber-300' : 'bg-blue-500/15 text-blue-300'}`}>
+                            {item.urgency}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">{item.open_request_count} open · {item.approved_count} approved · {item.pending_count} pending · {item.total_supporters} total supporters</p>
+                      </div>
+                      <button
+                        onClick={() => copyRequesterDigestNote(item)}
+                        className="rounded bg-violet-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-violet-500"
+                      >
+                        Copy digest
+                      </button>
+                    </div>
+
+                    <p className="text-sm text-slate-200">{item.reason}</p>
+
+                    <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+                      {item.breached_count > 0 && <span>{item.breached_count} breached</span>}
+                      {item.at_risk_count > 0 && <span>{item.at_risk_count} at risk</span>}
+                      <span>{item.request_titles.slice(0, 3).join(', ')}{item.request_titles.length > 3 ? ` +${item.request_titles.length - 3} more` : ''}</span>
+                    </div>
+
+                    <div className="space-y-2 rounded border border-slate-700 bg-slate-950/50 px-3 py-3">
+                      {item.requests.slice(0, 4).map((request) => (
+                        <div key={request.id} className="text-xs text-slate-300">
+                          <span className="font-medium text-white">{request.title}</span>
+                          <span className="text-slate-500"> · {request.status}</span>
+                          <div className="text-slate-400">
+                            {request.queue_position && request.queue_size
+                              ? `Queue #${request.queue_position} of ${request.queue_size}`
+                              : request.next_step_label || request.eta_label || request.promise_status || 'Still active'}
+                            {request.eta_label && !(request.queue_position && request.queue_size) ? '' : ''}
+                            {request.eta_label ? ` · ${request.eta_label}` : ''}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="rounded border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs whitespace-pre-line text-slate-200">
+                      {item.suggested_note}
                     </div>
                   </div>
                 ))}

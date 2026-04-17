@@ -195,6 +195,15 @@ async def get_reply_pack(
     return request_service.get_admin_reply_pack(db, limit=limit)
 
 
+@router.get("/requester-digest-pack")
+async def get_requester_digest_pack(
+    limit: int = Query(6, ge=1, le=25),
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    return request_service.get_requester_digest_pack(db, limit=limit)
+
+
 # --- User Management ---
 
 class RoleUpdate(BaseModel):

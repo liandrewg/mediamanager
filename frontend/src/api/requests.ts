@@ -199,6 +199,52 @@ export async function getAdminReplyPack(limit = 8): Promise<AdminReplyPackRespon
   return data
 }
 
+export interface RequesterDigestPackItemRequest {
+  id: number
+  title: string
+  status: string
+  media_type: string
+  supporter_count: number
+  days_open: number
+  queue_position?: number | null
+  queue_size?: number | null
+  next_step_label?: string | null
+  next_step_by?: string | null
+  eta_label?: string | null
+  promise_status?: string | null
+}
+
+export interface RequesterDigestPackItem {
+  user_id: string
+  username: string
+  urgency: 'critical' | 'high' | 'medium'
+  reason: string
+  open_request_count: number
+  breached_count: number
+  at_risk_count: number
+  approved_count: number
+  pending_count: number
+  total_supporters: number
+  request_titles: string[]
+  requests: RequesterDigestPackItemRequest[]
+  suggested_note: string
+}
+
+export interface RequesterDigestPackResponse {
+  summary: {
+    critical: number
+    high: number
+    medium: number
+    total: number
+  }
+  items: RequesterDigestPackItem[]
+}
+
+export async function getRequesterDigestPack(limit = 6): Promise<RequesterDigestPackResponse> {
+  const { data } = await client.get('/admin/requester-digest-pack', { params: { limit } })
+  return data
+}
+
 export async function getUsers() {
   const { data } = await client.get('/admin/users')
   return data

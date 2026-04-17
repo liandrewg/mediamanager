@@ -178,5 +178,114 @@ class SimulateSlaTargetsRouteTests(unittest.TestCase):
         self.assertIn("operational_risk_score", body["scenarios"][0])
 
 
+class RequesterDigestPackRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                target_days INTEGER NOT NULL DEFAULT 7 CHECK (target_days >= 1),
+                warning_days INTEGER NOT NULL DEFAULT 2 CHECK (warning_days >= 0),
+                updated_at TEXT
+            );
+
+            INSERT INTO sla_policy (id, target_days, warning_days, updated_at)
+            VALUES (1, 7, 2, '2026-04-01T00:00:00+00:00');
+
+            INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES
+                ('u1', 'alice', 101, 'movie', 'Late Movie', 'pending', '2026-03-25T10:00:00+00:00', '2026-03-25T10:00:00+00:00'),
+                ('u1', 'alice', 102, 'tv', 'Queued Show', 'approved', '2026-04-05T10:00:00+00:00', '2026-04-05T10:00:00+00:00'),
+                ('u2', 'bob', 201, 'movie', 'Fresh Ask', 'pending', '2026-04-16T10:00:00+00:00', '2026-04-16T10:00:00+00:00');
+
+            INSERT INTO request_supporters (request_id, user_id, username, created_at)
+            VALUES
+                (1, 'u1', 'alice', '2026-03-25T10:00:00+00:00'),
+                (1, 'u3', 'cara', '2026-03-26T10:00:00+00:00'),
+                (2, 'u1', 'alice', '2026-04-05T10:00:00+00:00'),
+                (2, 'u4', 'dave', '2026-04-06T10:00:00+00:00'),
+                (3, 'u2', 'bob', '2026-04-16T10:00:00+00:00');
+
+            INSERT INTO requests (id, user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES
+                (10, 'history-user', 'history', 910, 'movie', 'History A', 'fulfilled', '2026-04-01T10:00:00+00:00', '2026-04-04T10:00:00+00:00'),
+                (11, 'history-user', 'history', 911, 'movie', 'History B', 'fulfilled', '2026-04-02T10:00:00+00:00', '2026-04-08T10:00:00+00:00');
+
+            INSERT INTO request_supporters (request_id, user_id, username, created_at)
+            VALUES
+                (10, 'history-user', 'history', '2026-04-01T10:00:00+00:00'),
+                (11, 'history-user', 'history', '2026-04-02T10:00:00+00:00');
+
+            INSERT INTO request_history (request_id, old_status, new_status, changed_by, note, created_at)
+            VALUES
+                (10, 'approved', 'fulfilled', 'admin-1', NULL, '2026-04-04T10:00:00+00:00'),
+                (11, 'approved', 'fulfilled', 'admin-1', NULL, '2026-04-08T10:00:00+00:00');
+            """
+        )
+
+        self.app = FastAPI()
+        self.app.include_router(admin.router, prefix="/api/admin")
+
+        def override_db():
+            yield self.conn
+
+        async def override_admin():
+            return {"user_id": "admin-1", "is_admin": True}
+
+        self.app.dependency_overrides[get_db] = override_db
+        self.app.dependency_overrides[require_admin] = override_admin
+        self.client = TestClient(self.app)
+
+    def tearDown(self):
+        self.client.close()
+        self.app.dependency_overrides.clear()
+        self.conn.close()
+
+    def test_requester_digest_pack_returns_grouped_digest_items(self):
+        response = self.client.get('/api/admin/requester-digest-pack?limit=5')
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['summary']['total'], 1)
+        self.assertEqual(body['items'][0]['username'], 'alice')
+        self.assertEqual(body['items'][0]['open_request_count'], 2)
+        self.assertIn('Late Movie', body['items'][0]['request_titles'])
+
+
 if __name__ == "__main__":
     unittest.main()
