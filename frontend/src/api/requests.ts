@@ -89,6 +89,10 @@ export interface RequestRecord {
   promise_summary?: string | null
   follow_up_label?: string | null
   follow_up_by?: string | null
+  blocker_reason?: string | null
+  blocker_note?: string | null
+  blocker_review_on?: string | null
+  blocker_is_overdue?: boolean
   jellyfin_item_id?: string | null
   watch_url?: string | null
   created_at: string
@@ -242,6 +246,46 @@ export interface RequesterDigestPackResponse {
 
 export async function getRequesterDigestPack(limit = 6): Promise<RequesterDigestPackResponse> {
   const { data } = await client.get('/admin/requester-digest-pack', { params: { limit } })
+  return data
+}
+
+export interface RequestReviewLoopItem {
+  request_id: number
+  title: string
+  media_type: string
+  status: string
+  username: string
+  supporter_count: number
+  days_open: number
+  reason: string
+  note?: string | null
+  review_on: string
+  lane: 'overdue' | 'today' | 'upcoming'
+  is_overdue: boolean
+}
+
+export interface RequestReviewLoopResponse {
+  summary: {
+    overdue: number
+    today: number
+    upcoming: number
+    total: number
+  }
+  items: RequestReviewLoopItem[]
+}
+
+export async function getRequestReviewLoop(limit = 8): Promise<RequestReviewLoopResponse> {
+  const { data } = await client.get('/admin/review-loop', { params: { limit } })
+  return data
+}
+
+export async function setRequestBlocker(id: number, body: { reason: string; review_on: string; note?: string }) {
+  const { data } = await client.put(`/admin/requests/${id}/blocker`, body)
+  return data
+}
+
+export async function clearRequestBlocker(id: number) {
+  const { data } = await client.delete(`/admin/requests/${id}/blocker`)
   return data
 }
 

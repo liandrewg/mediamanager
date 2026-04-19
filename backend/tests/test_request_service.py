@@ -226,6 +226,113 @@ class BulkStatusUpdateTests(unittest.TestCase):
         self.assertEqual(result["updated"][0]["status"], "fulfilled")
 
 
+class RequestBlockerTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE request_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                actor_user_id TEXT,
+                actor_name TEXT,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
+            );
+            CREATE TABLE request_blockers (
+                request_id INTEGER PRIMARY KEY,
+                reason TEXT NOT NULL,
+                note TEXT,
+                review_on TEXT NOT NULL,
+                updated_by TEXT NOT NULL,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                target_days INTEGER NOT NULL,
+                warning_days INTEGER NOT NULL,
+                updated_at TEXT
+            );
+            INSERT INTO sla_policy (id, target_days, warning_days, updated_at)
+            VALUES (1, 7, 2, '2026-04-01T00:00:00+00:00');
+            INSERT INTO requests (id, user_id, username, tmdb_id, media_type, title, status, created_at, updated_at)
+            VALUES (1, 'u1', 'alice', 101, 'movie', 'Interstellar', 'approved', '2026-04-01T10:00:00+00:00', '2026-04-01T10:00:00+00:00');
+            INSERT INTO request_supporters (request_id, user_id, username, created_at)
+            VALUES (1, 'u1', 'alice', '2026-04-01T10:00:00+00:00');
+            """
+        )
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_upsert_blocker_surfaces_on_request_snapshot(self):
+        request_service.upsert_request_blocker(
+            self.conn,
+            1,
+            reason='Waiting for upstream release',
+            review_on='2026-04-20',
+            note='Check again after digital release window.',
+            changed_by='admin-1',
+        )
+
+        req = request_service.get_request_by_id(self.conn, 1)
+        self.assertEqual(req['blocker_reason'], 'Waiting for upstream release')
+        self.assertEqual(req['blocker_review_on'], '2026-04-20')
+        self.assertIn('Blocked:', req['next_step_label'])
+        self.assertEqual(req['follow_up_by'], '2026-04-20')
+
+    def test_review_loop_returns_blocked_requests(self):
+        request_service.upsert_request_blocker(
+            self.conn,
+            1,
+            reason='Waiting for upstream release',
+            review_on='2026-04-20',
+            note=None,
+            changed_by='admin-1',
+        )
+
+        loop = request_service.get_request_review_loop(self.conn, limit=5)
+        self.assertEqual(loop['summary']['total'], 1)
+        self.assertEqual(loop['items'][0]['request_id'], 1)
+        self.assertEqual(loop['items'][0]['reason'], 'Waiting for upstream release')
+
+
 class RequestStatsAgingTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")

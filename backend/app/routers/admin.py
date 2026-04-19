@@ -137,6 +137,12 @@ class SlaEscalationBulkRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class RequestBlockerUpdate(BaseModel):
+    reason: str = Field(..., min_length=2, max_length=120)
+    review_on: str = Field(..., min_length=10, max_length=40)
+    note: str | None = Field(default=None, max_length=300)
+
+
 @router.post("/requests/bulk-status")
 async def bulk_update_request_statuses(
     body: BulkRequestStatusUpdate,
@@ -202,6 +208,52 @@ async def get_requester_digest_pack(
     db=Depends(get_db),
 ):
     return request_service.get_requester_digest_pack(db, limit=limit)
+
+
+@router.get("/review-loop")
+async def get_request_review_loop(
+    limit: int = Query(8, ge=1, le=25),
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    return request_service.get_request_review_loop(db, limit=limit)
+
+
+@router.put("/requests/{request_id}/blocker", response_model=RequestResponse)
+async def set_request_blocker(
+    request_id: int,
+    body: RequestBlockerUpdate,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    try:
+        datetime.fromisoformat(body.review_on)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="review_on must be an ISO date or datetime")
+
+    try:
+        return request_service.upsert_request_blocker(
+            db,
+            request_id,
+            reason=body.reason,
+            review_on=body.review_on,
+            note=body.note,
+            changed_by=admin["user_id"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/requests/{request_id}/blocker", response_model=RequestResponse)
+async def delete_request_blocker(
+    request_id: int,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    try:
+        return request_service.clear_request_blocker(db, request_id, changed_by=admin["user_id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # --- User Management ---

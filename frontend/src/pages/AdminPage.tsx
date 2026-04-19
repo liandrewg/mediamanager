@@ -7,12 +7,15 @@ import {
   getAdminStats,
   getAdminReplyPack,
   getRequesterDigestPack,
+  getRequestReviewLoop,
   getUsers,
   updateUserRole,
   getHealthCheck,
   triggerJellyfinScan,
   getDuplicateRequestGroups,
   mergeDuplicateRequests,
+  setRequestBlocker,
+  clearRequestBlocker,
   getAnalytics,
   getSlaPolicy,
   updateSlaPolicy,
@@ -23,6 +26,7 @@ import {
   type AdminAnalytics,
   type AdminReplyPackItem,
   type DuplicateGroup,
+  type RequestReviewLoopItem,
   type RequesterDigestPackItem,
   type SlaSimulationScenario,
 } from '../api/requests'
@@ -110,6 +114,10 @@ export default function AdminPage() {
   const [ageFilter, setAgeFilter] = useState<'all' | '3' | '7' | '14'>('all')
   const [noteModal, setNoteModal] = useState<{ id: number; status: string } | null>(null)
   const [noteText, setNoteText] = useState('')
+  const [blockerModal, setBlockerModal] = useState<{ id: number; title: string; reason?: string | null; note?: string | null; reviewOn?: string | null } | null>(null)
+  const [blockerReason, setBlockerReason] = useState('')
+  const [blockerNote, setBlockerNote] = useState('')
+  const [blockerReviewOn, setBlockerReviewOn] = useState('')
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set())
   const [selectedRequestIds, setSelectedRequestIds] = useState<Set<number>>(new Set())
   const [duplicateSelections, setDuplicateSelections] = useState<DuplicateSelectionState>({})
@@ -150,6 +158,12 @@ export default function AdminPage() {
   const { data: requesterDigestPack } = useQuery({
     queryKey: ['requesterDigestPack'],
     queryFn: () => getRequesterDigestPack(6),
+    enabled: tab === 'requests',
+  })
+
+  const { data: requestReviewLoop } = useQuery({
+    queryKey: ['requestReviewLoop'],
+    queryFn: () => getRequestReviewLoop(8),
     enabled: tab === 'requests',
   })
 
@@ -270,6 +284,27 @@ export default function AdminPage() {
     },
   })
 
+  const blockerMutation = useMutation({
+    mutationFn: ({ id, reason, review_on, note }: { id: number; reason: string; review_on: string; note?: string }) =>
+      setRequestBlocker(id, { reason, review_on, note }),
+    onSuccess: () => {
+      setBlockerModal(null)
+      setBlockerReason('')
+      setBlockerNote('')
+      setBlockerReviewOn('')
+      queryClient.invalidateQueries({ queryKey: ['adminRequests'] })
+      queryClient.invalidateQueries({ queryKey: ['requestReviewLoop'] })
+    },
+  })
+
+  const clearBlockerMutation = useMutation({
+    mutationFn: (id: number) => clearRequestBlocker(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adminRequests'] })
+      queryClient.invalidateQueries({ queryKey: ['requestReviewLoop'] })
+    },
+  })
+
   const bulkUpdateMutation = useMutation({
     mutationFn: ({ requestIds, status }: { requestIds: number[]; status: string }) =>
       bulkUpdateRequests(requestIds, status, `Bulk update from admin table (${requestIds.length} requests)`),
@@ -368,6 +403,35 @@ export default function AdminPage() {
   }
   const copyRequesterDigestNote = async (item: RequesterDigestPackItem) => {
     await navigator.clipboard.writeText(item.suggested_note)
+  }
+  const openBlockerModal = (req: any) => {
+    setBlockerModal({
+      id: req.id,
+      title: req.title,
+      reason: req.blocker_reason,
+      note: req.blocker_note,
+      reviewOn: req.blocker_review_on,
+    })
+    setBlockerReason(req.blocker_reason || '')
+    setBlockerNote(req.blocker_note || '')
+    setBlockerReviewOn(req.blocker_review_on ? String(req.blocker_review_on).slice(0, 10) : '')
+  }
+  const saveBlocker = () => {
+    if (!blockerModal || !blockerReason.trim() || !blockerReviewOn) return
+    blockerMutation.mutate({
+      id: blockerModal.id,
+      reason: blockerReason.trim(),
+      review_on: blockerReviewOn,
+      note: blockerNote.trim() || undefined,
+    })
+  }
+  const copyReviewLoopNote = async (item: RequestReviewLoopItem) => {
+    const lines = [
+      `${item.title} is blocked: ${item.reason}.`,
+      `Next review on ${new Date(item.review_on).toLocaleDateString()}.`,
+    ]
+    if (item.note) lines.push(item.note)
+    await navigator.clipboard.writeText(lines.join(' '))
   }
   const minAge = ageFilter === 'all' ? 0 : Number(ageFilter)
   const displayedRequests =
@@ -736,6 +800,47 @@ export default function AdminPage() {
             </div>
           )}
 
+          {!isLoading && requestReviewLoop && requestReviewLoop.summary.total > 0 && (
+            <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-4">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-white font-semibold">Blocked Review Loop</h3>
+                  <p className="text-sm text-slate-300">Keep blocked titles visible so they do not vanish into polite limbo.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-red-500/15 px-2 py-1 text-red-300">{requestReviewLoop.summary.overdue} overdue</span>
+                  <span className="rounded-full bg-amber-500/15 px-2 py-1 text-amber-300">{requestReviewLoop.summary.today} today</span>
+                  <span className="rounded-full bg-blue-500/15 px-2 py-1 text-blue-300">{requestReviewLoop.summary.upcoming} upcoming</span>
+                </div>
+              </div>
+
+              <div className="grid gap-3 xl:grid-cols-2">
+                {requestReviewLoop.items.map((item) => (
+                  <div key={item.request_id} className="rounded-lg border border-slate-700 bg-slate-900/70 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-white">{item.title}</p>
+                          <RequestBadge status={item.status} />
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${item.lane === 'overdue' ? 'bg-red-500/15 text-red-300' : item.lane === 'today' ? 'bg-amber-500/15 text-amber-300' : 'bg-blue-500/15 text-blue-300'}`}>
+                            {item.lane}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-400">{item.username} · {item.supporter_count} supporters · {item.days_open}d open</p>
+                      </div>
+                      <button onClick={() => copyReviewLoopNote(item)} className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800">Copy update</button>
+                    </div>
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                      <p>{item.reason}</p>
+                      {item.note && <p className="mt-1 text-xs text-amber-200/80">{item.note}</p>}
+                      <p className="mt-1 text-xs text-amber-200/80">Review on {new Date(item.review_on).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {!isLoading && replyPack && replyPack.summary.total > 0 && (
             <div className="mb-6 rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4 space-y-4">
               <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -896,6 +1001,13 @@ export default function AdminPage() {
                               {req.admin_note}
                             </p>
                           )}
+                          {req.blocker_reason && (
+                            <div className={`rounded-lg border px-3 py-2 text-xs ${req.blocker_is_overdue ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                              <p className="font-medium">Blocked: {req.blocker_reason}</p>
+                              {req.blocker_note && <p className="mt-1 opacity-80">{req.blocker_note}</p>}
+                              {req.blocker_review_on && <p className="mt-1 opacity-80">Review on {new Date(req.blocker_review_on).toLocaleDateString()}</p>}
+                            </div>
+                          )}
                           {req.watch_url && (
                             <a
                               href={req.watch_url}
@@ -930,6 +1042,22 @@ export default function AdminPage() {
                           >
                             {expandedComments.has(req.id) ? '▲ Hide comments' : '💬 Comments'}
                           </button>
+                          {['pending', 'approved'].includes(req.status) && (
+                            <button
+                              onClick={() => openBlockerModal(req)}
+                              className="text-xs text-amber-300 hover:text-amber-200 transition-colors pt-0.5"
+                            >
+                              {req.blocker_reason ? '⏱ Edit blocker' : '⏱ Set blocker'}
+                            </button>
+                          )}
+                          {req.blocker_reason && (
+                            <button
+                              onClick={() => clearBlockerMutation.mutate(req.id)}
+                              className="text-xs text-slate-400 hover:text-white transition-colors pt-0.5"
+                            >
+                              Clear blocker
+                            </button>
+                          )}
                           {expandedComments.has(req.id) && (
                             <RequestComments requestId={req.id} />
                           )}
@@ -994,7 +1122,17 @@ export default function AdminPage() {
                           </td>
                           <td className="px-4 py-3"><RequestBadge status={req.status} /></td>
                           <td className="px-4 py-3 text-slate-400 text-sm">{new Date(req.created_at).toLocaleDateString()}</td>
-                          <td className="px-4 py-3 text-slate-400 text-sm max-w-48 truncate">{req.admin_note || '-'}</td>
+                          <td className="px-4 py-3 text-slate-400 text-sm max-w-56">
+                            <div className="space-y-1">
+                              <div className="truncate">{req.admin_note || '-'}</div>
+                              {req.blocker_reason && (
+                                <div className={`rounded border px-2 py-1 text-xs ${req.blocker_is_overdue ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                                  <div>{req.blocker_reason}</div>
+                                  {req.blocker_review_on && <div className="opacity-80 mt-0.5">Review {new Date(req.blocker_review_on).toLocaleDateString()}</div>}
+                                </div>
+                              )}
+                            </div>
+                          </td>
                           <td className="px-4 py-3">
                             {req.watch_url ? (
                               <a href={req.watch_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 px-2 py-1 bg-green-600/20 hover:bg-green-600/40 text-green-400 text-xs font-medium rounded transition-colors">
@@ -1008,12 +1146,22 @@ export default function AdminPage() {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <div className="flex gap-1.5">
+                            <div className="flex flex-wrap gap-1.5">
                               {transitions.map((t) => (
                                 <button key={t.status} onClick={() => quickMove(req.id, t.status)} disabled={updateMutation.isPending} className={`px-2 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 ${t.style}`}>
                                   {t.label}
                                 </button>
                               ))}
+                              {['pending', 'approved'].includes(req.status) && (
+                                <button onClick={() => openBlockerModal(req)} className="px-2 py-1 rounded text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white">
+                                  {req.blocker_reason ? 'Edit blocker' : 'Set blocker'}
+                                </button>
+                              )}
+                              {req.blocker_reason && (
+                                <button onClick={() => clearBlockerMutation.mutate(req.id)} className="px-2 py-1 rounded text-xs font-medium bg-slate-700 hover:bg-slate-600 text-white">
+                                  Clear
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -2028,6 +2176,49 @@ export default function AdminPage() {
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-sm rounded-lg font-medium transition-colors"
               >
                 {backlogMutation.isPending ? 'Updating...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Blocker Modal */}
+      {blockerModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-xl p-6 w-full max-w-md shadow-xl space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold text-white mb-1">Set request blocker</h3>
+              <p className="text-sm text-slate-400">Make the queue honest about why <span className="text-white">{blockerModal.title}</span> is paused and when it gets re-checked.</p>
+            </div>
+            <label className="block text-sm text-slate-300">Reason
+              <input
+                value={blockerReason}
+                onChange={(e) => setBlockerReason(e.target.value)}
+                placeholder="Waiting for upstream release"
+                className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-white"
+              />
+            </label>
+            <label className="block text-sm text-slate-300">Review date
+              <input
+                type="date"
+                value={blockerReviewOn}
+                onChange={(e) => setBlockerReviewOn(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-white"
+              />
+            </label>
+            <label className="block text-sm text-slate-300">Requester-visible note
+              <textarea
+                value={blockerNote}
+                onChange={(e) => setBlockerNote(e.target.value)}
+                rows={3}
+                placeholder="Optional detail so they do not have to ask what is going on."
+                className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-white placeholder-slate-400"
+              />
+            </label>
+            <div className="flex justify-between gap-3">
+              <button onClick={() => { setBlockerModal(null); setBlockerReason(''); setBlockerNote(''); setBlockerReviewOn('') }} className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Cancel</button>
+              <button onClick={saveBlocker} disabled={!blockerReason.trim() || !blockerReviewOn || blockerMutation.isPending} className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-medium">
+                {blockerMutation.isPending ? 'Saving...' : 'Save blocker'}
               </button>
             </div>
           </div>

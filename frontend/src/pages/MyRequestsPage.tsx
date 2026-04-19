@@ -106,6 +106,23 @@ function PromiseSnapshot({ req }: { req: any }) {
   )
 }
 
+function BlockerSnapshot({ req }: { req: any }) {
+  if (!req.blocker_reason) return null
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 space-y-1 ${req.blocker_is_overdue ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide">
+          {req.blocker_is_overdue ? 'Review overdue' : 'Blocked, with next review set'}
+        </span>
+      </div>
+      <p className="text-xs">{req.blocker_reason}</p>
+      {req.blocker_note && <p className="text-xs opacity-90">{req.blocker_note}</p>}
+      {req.blocker_review_on && <p className="text-xs opacity-90">Review on {new Date(req.blocker_review_on).toLocaleDateString()}</p>}
+    </div>
+  )
+}
+
 function QueueTransparency({ req }: { req: any }) {
   if (!req.queue_reason && !req.blocker_label && !req.queue_position) return null
 
@@ -232,6 +249,7 @@ export default function MyRequestsPage() {
               )}
               <p className="text-xs text-slate-500">{req.supporter_count || 1} supporter{(req.supporter_count || 1) === 1 ? '' : 's'}</p>
               <QueueTransparency req={req} />
+              <BlockerSnapshot req={req} />
               <PromiseSnapshot req={req} />
               <NextStepHint req={req} />
               <EtaHint req={req} />
@@ -309,6 +327,13 @@ export default function MyRequestsPage() {
                             </div>
                             {req.queue_reason && <div className="text-slate-400 mt-0.5">{req.queue_reason}</div>}
                             {req.blocker_label && <div className="text-slate-500 mt-0.5">{req.blocker_label}</div>}
+                            {req.blocker_reason && (
+                              <div className={`mt-1 rounded border px-2 py-1 ${req.blocker_is_overdue ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                                <div>{req.blocker_reason}</div>
+                                {req.blocker_note && <div className="text-[11px] opacity-80 mt-0.5">{req.blocker_note}</div>}
+                                {req.blocker_review_on && <div className="text-[11px] opacity-80 mt-0.5">Review on {new Date(req.blocker_review_on).toLocaleDateString()}</div>}
+                              </div>
+                            )}
                             {req.promise_summary && <div className="text-slate-300 mt-1">{req.promise_summary}</div>}
                             {req.benchmark_label && <div className="text-slate-500 mt-0.5">Normal: {req.benchmark_label}</div>}
                             {req.follow_up_label && (

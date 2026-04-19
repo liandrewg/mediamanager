@@ -191,6 +191,7 @@ class RequesterDigestPackRouteTests(unittest.TestCase):
                 tmdb_id INTEGER NOT NULL,
                 media_type TEXT NOT NULL,
                 title TEXT NOT NULL,
+                poster_path TEXT,
                 status TEXT NOT NULL,
                 admin_note TEXT,
                 created_at TEXT NOT NULL,
@@ -285,6 +286,117 @@ class RequesterDigestPackRouteTests(unittest.TestCase):
         self.assertEqual(body['items'][0]['username'], 'alice')
         self.assertEqual(body['items'][0]['open_request_count'], 2)
         self.assertIn('Late Movie', body['items'][0]['request_titles'])
+
+
+class RequestBlockerRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL,
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE request_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                actor_user_id TEXT,
+                actor_name TEXT,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT
+            );
+            CREATE TABLE request_blockers (
+                request_id INTEGER PRIMARY KEY,
+                reason TEXT NOT NULL,
+                note TEXT,
+                review_on TEXT NOT NULL,
+                updated_by TEXT NOT NULL,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                target_days INTEGER NOT NULL DEFAULT 7,
+                warning_days INTEGER NOT NULL DEFAULT 2,
+                updated_at TEXT
+            );
+            INSERT INTO sla_policy (id, target_days, warning_days, updated_at)
+            VALUES (1, 7, 2, '2026-04-01T00:00:00+00:00');
+            INSERT INTO requests (id, user_id, username, tmdb_id, media_type, title, poster_path, status, created_at, updated_at)
+            VALUES (1, 'u1', 'alice', 101, 'movie', 'Interstellar', NULL, 'approved', '2026-04-01T10:00:00+00:00', '2026-04-01T10:00:00+00:00');
+            INSERT INTO request_supporters (request_id, user_id, username, created_at)
+            VALUES (1, 'u1', 'alice', '2026-04-01T10:00:00+00:00');
+            """
+        )
+
+        self.app = FastAPI()
+        self.app.include_router(admin.router, prefix="/api/admin")
+
+        def override_db():
+            yield self.conn
+
+        async def override_admin():
+            return {"user_id": "admin-1", "is_admin": True}
+
+        self.app.dependency_overrides[get_db] = override_db
+        self.app.dependency_overrides[require_admin] = override_admin
+        self.client = TestClient(self.app)
+
+    def tearDown(self):
+        self.client.close()
+        self.app.dependency_overrides.clear()
+        self.conn.close()
+
+    def test_can_set_and_clear_request_blocker(self):
+        response = self.client.put(
+            '/api/admin/requests/1/blocker',
+            json={
+                'reason': 'Waiting for upstream release',
+                'review_on': '2026-04-20',
+                'note': 'Check again after release day',
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['blocker_reason'], 'Waiting for upstream release')
+
+        review_loop = self.client.get('/api/admin/review-loop?limit=5')
+        self.assertEqual(review_loop.status_code, 200)
+        self.assertEqual(review_loop.json()['summary']['total'], 1)
+
+        cleared = self.client.delete('/api/admin/requests/1/blocker')
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIsNone(cleared.json()['blocker_reason'])
 
 
 if __name__ == "__main__":

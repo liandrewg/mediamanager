@@ -18,6 +18,8 @@ PENDING_REMINDER_MARKER = "[AUTO-PENDING-REMINDER]"
 DENIED_AUTO_CLOSE_MIN_AGE_DAYS = 14
 DENIED_AUTO_CLOSE_MARKER = "[AUTO-CLOSED-DENIED]"
 SLA_ESCALATION_MARKER = "[SLA-ESCALATION]"
+BLOCKER_SET_MARKER = "[BLOCKER-SET]"
+BLOCKER_CLEAR_MARKER = "[BLOCKER-CLEARED]"
 
 DEFAULT_SLA_WARNING_DAYS = 2
 
@@ -61,6 +63,10 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
     req["blocker_label"] = None
     req["next_step_label"] = None
     req["next_step_by"] = None
+    req["blocker_reason"] = None
+    req["blocker_note"] = None
+    req["blocker_review_on"] = None
+    req["blocker_is_overdue"] = False
 
     req["is_owner"] = user_id == req["user_id"] if user_id else False
     req["user_supporting"] = False
@@ -78,7 +84,26 @@ def _serialize_request(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str 
         req["watch_url"] = f"{base}/web/index.html#!/details?id={jellyfin_item_id}"
     else:
         req["watch_url"] = None
+
+    blocker = _get_request_blocker(conn, req["id"])
+    if blocker:
+        req["blocker_reason"] = blocker["reason"]
+        req["blocker_note"] = blocker.get("note")
+        req["blocker_review_on"] = blocker["review_on"]
+        review_dt = _parse_request_datetime(blocker["review_on"])
+        req["blocker_is_overdue"] = review_dt.date() < datetime.now(timezone.utc).date()
     return req
+
+
+def _get_request_blocker(conn: sqlite3.Connection, request_id: int) -> dict | None:
+    try:
+        row = conn.execute(
+            "SELECT request_id, reason, note, review_on, updated_by, created_at, updated_at FROM request_blockers WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return dict(row) if row else None
 
 
 def _estimate_median_fulfillment_days(conn: sqlite3.Connection) -> float | None:
@@ -232,6 +257,13 @@ def _build_next_step_hint(
     days_open = int(req.get("days_open") or 0)
     queue_position = req.get("queue_position")
 
+    if status in OPEN_REQUEST_STATUSES and req.get("blocker_reason"):
+        review_on = req.get("blocker_review_on")
+        reason = req.get("blocker_reason")
+        if review_on:
+            return (f"Blocked: {reason}. Review on {review_on}", review_on)
+        return (f"Blocked: {reason}", None)
+
     if status == "pending":
         remaining = max(policy_target_days - days_open, 0)
         queue_text = f" (queue #{queue_position})" if queue_position else ""
@@ -284,6 +316,17 @@ def _apply_request_promise_context(
 
     days_open = int(req.get("days_open") or 0)
     media_label = (req.get("media_type") or "request").upper()
+
+    if status in OPEN_REQUEST_STATUSES and req.get("blocker_reason"):
+        req["follow_up_by"] = req.get("blocker_review_on")
+        req["follow_up_label"] = "Next admin review date"
+        if req.get("blocker_is_overdue"):
+            req["promise_status"] = "at_risk"
+            req["promise_summary"] = "Blocked, and the promised review date already slipped. This should get admin eyes now."
+        else:
+            req["promise_status"] = "on_track"
+            req["promise_summary"] = f"Blocked for a known reason: {req['blocker_reason']}."
+        return
 
     if fulfillment_window:
         start_days = max(int(round(fulfillment_window["p50_days"])), 0)
@@ -1278,6 +1321,10 @@ def get_request_timeline(
                 title = "Pending reminder logged"
             elif DENIED_AUTO_CLOSE_MARKER in note:
                 title = "Auto-close update logged"
+            elif BLOCKER_SET_MARKER in note:
+                title = "Blocked review scheduled"
+            elif BLOCKER_CLEAR_MARKER in note:
+                title = "Blocked review cleared"
 
         events.append(
             {
@@ -1446,6 +1493,145 @@ def get_all_requests(
     }
 
 
+def get_request_review_loop(conn: sqlite3.Connection, limit: int = 8) -> dict:
+    try:
+        rows = conn.execute(
+            """
+            SELECT rb.request_id, rb.reason, rb.note, rb.review_on, rb.updated_at,
+                   r.status, r.title, r.media_type, r.username, r.created_at,
+                   (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) AS supporter_count
+            FROM request_blockers rb
+            JOIN requests r ON r.id = rb.request_id
+            WHERE r.status IN ('pending', 'approved')
+            ORDER BY date(rb.review_on) ASC, supporter_count DESC, r.created_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+
+    today = datetime.now(timezone.utc).date()
+    items: list[dict] = []
+    summary = {"overdue": 0, "today": 0, "upcoming": 0, "total": 0}
+    for row in rows:
+        req = get_request_by_id(conn, row["request_id"])
+        if not req:
+            continue
+        review_date = _parse_request_datetime(row["review_on"]).date()
+        if review_date < today:
+            lane = "overdue"
+            summary["overdue"] += 1
+        elif review_date == today:
+            lane = "today"
+            summary["today"] += 1
+        else:
+            lane = "upcoming"
+            summary["upcoming"] += 1
+
+        items.append(
+            {
+                "request_id": req["id"],
+                "title": req["title"],
+                "media_type": req["media_type"],
+                "status": req["status"],
+                "username": req["username"],
+                "supporter_count": req["supporter_count"],
+                "days_open": req["days_open"],
+                "reason": row["reason"],
+                "note": row["note"],
+                "review_on": row["review_on"],
+                "lane": lane,
+                "is_overdue": lane == "overdue",
+            }
+        )
+    summary["total"] = len(items)
+    return {"summary": summary, "items": items}
+
+
+def upsert_request_blocker(
+    conn: sqlite3.Connection,
+    request_id: int,
+    *,
+    reason: str,
+    review_on: str,
+    note: str | None,
+    changed_by: str,
+) -> dict:
+    row = conn.execute("SELECT id, status FROM requests WHERE id = ?", (request_id,)).fetchone()
+    if not row:
+        raise ValueError("Request not found")
+    if row["status"] not in OPEN_REQUEST_STATUSES:
+        raise ValueError("Only pending or approved requests can carry a blocker")
+
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        """
+        INSERT INTO request_blockers (request_id, reason, note, review_on, updated_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(request_id) DO UPDATE SET
+            reason = excluded.reason,
+            note = excluded.note,
+            review_on = excluded.review_on,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        """,
+        (request_id, reason.strip(), note.strip() if note else None, review_on, changed_by, now, now),
+    )
+    history_note = f"{BLOCKER_SET_MARKER} {reason.strip()}"
+    if note and note.strip():
+        history_note += f". {note.strip()}"
+    history_note += f" Review on {review_on}."
+    conn.execute(
+        "INSERT INTO request_history (request_id, old_status, new_status, changed_by, note) VALUES (?, ?, ?, ?, ?)",
+        (request_id, row["status"], row["status"], changed_by, history_note),
+    )
+    display_actor_name = _resolve_actor_name(conn, changed_by)
+    _create_request_notifications(
+        conn,
+        request_id,
+        event_type="status_note",
+        message=f"Blocked on {reason.strip()}. Next review on {review_on}.",
+        actor_user_id=changed_by,
+        actor_name=display_actor_name,
+    )
+    conn.commit()
+    return get_request_by_id(conn, request_id)
+
+
+def clear_request_blocker(conn: sqlite3.Connection, request_id: int, *, changed_by: str) -> dict:
+    row = conn.execute("SELECT id, status FROM requests WHERE id = ?", (request_id,)).fetchone()
+    if not row:
+        raise ValueError("Request not found")
+    blocker = _get_request_blocker(conn, request_id)
+    if not blocker:
+        raise ValueError("Request blocker not found")
+
+    conn.execute("DELETE FROM request_blockers WHERE request_id = ?", (request_id,))
+    conn.execute(
+        "INSERT INTO request_history (request_id, old_status, new_status, changed_by, note) VALUES (?, ?, ?, ?, ?)",
+        (request_id, row["status"], row["status"], changed_by, f"{BLOCKER_CLEAR_MARKER} {blocker['reason']}"),
+    )
+    display_actor_name = _resolve_actor_name(conn, changed_by)
+    _create_request_notifications(
+        conn,
+        request_id,
+        event_type="status_note",
+        message="Blocker cleared. Request is back in the active queue.",
+        actor_user_id=changed_by,
+        actor_name=display_actor_name,
+    )
+    conn.commit()
+    return get_request_by_id(conn, request_id)
+
+
+def _delete_request_blocker_if_supported(conn: sqlite3.Connection, request_id: int) -> None:
+    try:
+        conn.execute("DELETE FROM request_blockers WHERE request_id = ?", (request_id,))
+    except sqlite3.OperationalError:
+        pass
+
+
 def get_duplicate_request_groups(conn: sqlite3.Connection) -> list[dict]:
     active_rows = _get_active_duplicate_candidate_rows(conn)
     return _build_duplicate_groups(conn, active_rows)
@@ -1481,6 +1667,8 @@ def update_request_status(
            VALUES (?, ?, ?, ?, ?)""",
         (request_id, old_status, new_status, changed_by, admin_note),
     )
+    if new_status not in OPEN_REQUEST_STATUSES:
+        _delete_request_blocker_if_supported(conn, request_id)
     if old_status != new_status:
         display_actor_name = _resolve_actor_name(conn, changed_by)
         _create_request_notifications(
@@ -1526,6 +1714,8 @@ def bulk_update_request_status(
                VALUES (?, ?, ?, ?, ?)""",
             (request_id, old_status, new_status, changed_by, admin_note),
         )
+        if new_status not in OPEN_REQUEST_STATUSES:
+            _delete_request_blocker_if_supported(conn, request_id)
         if old_status != new_status:
             display_actor_name = _resolve_actor_name(conn, changed_by)
             _create_request_notifications(

@@ -304,6 +304,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_request_notifications_user_id ON request_notifications(user_id);
         CREATE INDEX IF NOT EXISTS idx_request_notifications_request_id ON request_notifications(request_id);
         CREATE INDEX IF NOT EXISTS idx_request_notifications_is_read ON request_notifications(is_read);
+
+        CREATE TABLE IF NOT EXISTS request_blockers (
+            request_id   INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+            reason       TEXT NOT NULL,
+            note         TEXT,
+            review_on    TEXT NOT NULL,
+            updated_by   TEXT NOT NULL,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_request_blockers_review_on ON request_blockers(review_on);
     """)
     conn.commit()
 

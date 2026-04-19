@@ -58,6 +58,10 @@ class RequestResponse(BaseModel):
     promise_summary: Optional[str] = None
     follow_up_label: Optional[str] = None
     follow_up_by: Optional[str] = None
+    blocker_reason: Optional[str] = None
+    blocker_note: Optional[str] = None
+    blocker_review_on: Optional[str] = None
+    blocker_is_overdue: bool = False
     jellyfin_item_id: Optional[str] = None
     watch_url: Optional[str] = None
     created_at: str
