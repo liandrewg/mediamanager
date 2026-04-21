@@ -184,3 +184,45 @@ def test_approved_requests_get_media_type_promise_snapshot():
     assert req["benchmark_label"] == "MOVIE requests like this usually land in about 2d."
     assert req["promise_status"] == "ahead"
     assert req["follow_up_label"] == "Follow up if it slips past the typical delivery window."
+
+
+def test_household_queue_includes_open_summary_and_user_context():
+    conn = make_db()
+    seed_request(
+        conn,
+        user_id="u1",
+        username="Alice",
+        title="Alpha",
+        status="approved",
+        supporters=[("u1", "Alice"), ("u2", "Bob")],
+        created_at="2026-04-01T00:00:00+00:00",
+    )
+    seed_request(
+        conn,
+        user_id="u3",
+        username="Cara",
+        title="Beta",
+        status="pending",
+        supporters=[("u3", "Cara")],
+        created_at="2026-04-02T00:00:00+00:00",
+    )
+    seed_request(
+        conn,
+        user_id="u4",
+        username="Drew",
+        title="Gamma",
+        status="fulfilled",
+        supporters=[("u4", "Drew")],
+        created_at="2026-04-03T00:00:00+00:00",
+    )
+
+    result = request_service.get_household_queue(conn, user_id="u2", status="open", page=1, limit=10)
+
+    assert result["summary"]["open_total"] == 2
+    assert result["summary"]["approved"] == 1
+    assert result["summary"]["pending"] == 1
+    assert result["summary"]["total_supporters"] == 3
+    assert [item["title"] for item in result["items"]] == ["Alpha", "Beta"]
+    assert result["items"][0]["user_supporting"] is True
+    assert result["items"][0]["queue_position"] == 1
+    assert result["items"][1]["queue_position"] == 2

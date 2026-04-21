@@ -19,6 +19,41 @@ export async function getMyRequests(page = 1, limit = 20, status?: string) {
   return data
 }
 
+export interface HouseholdQueueResponse {
+  items: RequestRecord[]
+  total: number
+  page: number
+  limit: number
+  total_pages: number
+  summary: {
+    total: number
+    pending: number
+    approved: number
+    open_total: number
+    total_supporters: number
+  }
+}
+
+export async function getHouseholdQueue(options?: {
+  page?: number
+  limit?: number
+  status?: 'open' | 'all' | 'pending' | 'approved' | 'fulfilled' | 'denied'
+  mediaType?: 'movie' | 'tv' | 'book'
+  sort?: 'priority' | 'supporters' | 'newest' | 'oldest'
+  query?: string
+}): Promise<HouseholdQueueResponse> {
+  const params: Record<string, string | number> = {
+    page: options?.page ?? 1,
+    limit: options?.limit ?? 20,
+    status: options?.status ?? 'open',
+    sort: options?.sort ?? 'priority',
+  }
+  if (options?.mediaType) params.media_type = options.mediaType
+  if (options?.query) params.q = options.query
+  const { data } = await client.get('/requests/household', { params })
+  return data
+}
+
 export async function deleteRequest(id: number) {
   const { data } = await client.delete(`/requests/${id}`)
   return data

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import { getLibraryStats, getRecentlyAdded } from '../api/jellyfin'
-import { getMyRequests, getAdminStats } from '../api/requests'
+import { getMyRequests, getAdminStats, getHouseholdQueue } from '../api/requests'
 import StatsCard from '../components/StatsCard'
 import RequestBadge from '../components/RequestBadge'
 import { Link } from 'react-router-dom'
@@ -22,6 +22,11 @@ export default function DashboardPage() {
   const { data: myRequests } = useQuery({
     queryKey: ['myRequests', 'dashboard'],
     queryFn: () => getMyRequests(1, 5),
+  })
+
+  const { data: householdQueue } = useQuery({
+    queryKey: ['householdQueue', 'dashboard'],
+    queryFn: () => getHouseholdQueue({ limit: 5 }),
   })
 
   const { data: adminStats } = useQuery({
@@ -72,6 +77,33 @@ export default function DashboardPage() {
                 <div className="min-w-0">
                   <span className="text-white text-sm truncate block">{req.title}</span>
                   <span className="text-slate-500 text-xs uppercase">{req.media_type}</span>
+                </div>
+                <div className="flex-shrink-0">
+                  <RequestBadge status={req.status} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {householdQueue?.items && householdQueue.items.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold text-white">Household Queue</h3>
+            <Link to="/household-queue" className="text-sm text-blue-400 hover:text-blue-300">
+              View queue
+            </Link>
+          </div>
+          <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+            {householdQueue.items.map((req: any) => (
+              <div key={req.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <span className="text-white text-sm truncate block">{req.title}</span>
+                  <span className="text-slate-500 text-xs">
+                    {req.supporter_count} supporter{req.supporter_count === 1 ? '' : 's'}
+                    {req.queue_position ? ` • queue #${req.queue_position}` : ''}
+                  </span>
                 </div>
                 <div className="flex-shrink-0">
                   <RequestBadge status={req.status} />

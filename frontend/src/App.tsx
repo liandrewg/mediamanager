@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage'
 import SearchPage from './pages/SearchPage'
 import MediaDetailPage from './pages/MediaDetailPage'
 import LibraryPage from './pages/LibraryPage'
+import HouseholdQueuePage from './pages/HouseholdQueuePage'
 import MyRequestsPage from './pages/MyRequestsPage'
 import NotificationsPage from './pages/NotificationsPage'
 import AdminPage from './pages/AdminPage'
@@ -26,6 +27,7 @@ function App() {
           <Route path="/tv/:tmdbId" element={<MediaDetailPage mediaType="tv" />} />
           <Route path="/book/:workId" element={<BookDetailPage />} />
           <Route path="/library" element={<LibraryPage />} />
+          <Route path="/household-queue" element={<HouseholdQueuePage />} />
           <Route path="/my-requests" element={<MyRequestsPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/report" element={<ReportPage />} />

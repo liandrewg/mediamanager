@@ -1437,6 +1437,131 @@ def get_user_requests(
     }
 
 
+def get_household_queue(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    status: str = "open",
+    media_type: str | None = None,
+    search: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+    sort: str = "priority",
+) -> dict:
+    where_parts: list[str] = []
+    params: list = []
+
+    normalized_status = (status or "open").strip().lower()
+    if normalized_status == "open":
+        where_parts.append("r.status IN ('pending', 'approved')")
+    elif normalized_status in {"pending", "approved", "fulfilled", "denied"}:
+        where_parts.append("r.status = ?")
+        params.append(normalized_status)
+    elif normalized_status != "all":
+        raise ValueError("Invalid status filter")
+
+    if media_type:
+        where_parts.append("r.media_type = ?")
+        params.append(media_type)
+
+    if search:
+        where_parts.append("LOWER(r.title) LIKE ?")
+        params.append(f"%{search.strip().lower()}%")
+
+    where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    sort_sql = {
+        "newest": "r.created_at DESC",
+        "oldest": "r.created_at ASC",
+        "supporters": "supporter_count DESC, r.created_at ASC",
+        "priority": "CASE WHEN r.status = 'approved' THEN 0 WHEN r.status = 'pending' THEN 1 ELSE 2 END, supporter_count DESC, r.created_at ASC",
+    }.get(sort, "CASE WHEN r.status = 'approved' THEN 0 WHEN r.status = 'pending' THEN 1 ELSE 2 END, supporter_count DESC, r.created_at ASC")
+
+    base_query = f"""
+        SELECT r.*,
+               (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) AS supporter_count
+        FROM requests r
+        {where}
+    """
+
+    total = conn.execute(f"SELECT COUNT(*) FROM ({base_query}) queued", params).fetchone()[0]
+    offset = (page - 1) * limit
+    rows = conn.execute(
+        f"""
+        {base_query}
+        ORDER BY {sort_sql}
+        LIMIT ? OFFSET ?
+        """,
+        params + [limit, offset],
+    ).fetchall()
+
+    open_rows = conn.execute(
+        """
+        SELECT r.*, (SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id) as supporter_count
+        FROM requests r
+        WHERE r.status IN ('pending', 'approved')
+        ORDER BY supporter_count DESC, r.created_at ASC, r.id ASC
+        """
+    ).fetchall()
+    queue_context = _build_queue_transparency_context(open_rows)
+    policy = get_sla_policy(conn)
+    median_fulfillment_days = _estimate_median_fulfillment_days(conn)
+    fulfillment_windows: dict[str, dict | None] = {}
+
+    items: list[dict] = []
+    for row in rows:
+        req = _serialize_request(conn, row, user_id)
+        if req.get("status") in OPEN_REQUEST_STATUSES:
+            req.update(queue_context.get(req["id"], {}))
+
+        label, next_step_by = _build_next_step_hint(
+            req=req,
+            policy_target_days=policy["target_days"],
+            median_fulfillment_days=median_fulfillment_days,
+        )
+        req["next_step_label"] = label
+        req["next_step_by"] = next_step_by
+
+        media_key = req.get("media_type") or "unknown"
+        if media_key not in fulfillment_windows:
+            fulfillment_windows[media_key] = _estimate_fulfillment_window_for_media_type(conn, media_key)
+        _apply_request_promise_context(
+            req,
+            policy_target_days=policy["target_days"],
+            policy_warning_days=policy["warning_days"],
+            fulfillment_window=fulfillment_windows[media_key],
+        )
+        items.append(req)
+
+    summary_row = conn.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN r.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+            COALESCE(SUM(CASE WHEN r.status = 'approved' THEN 1 ELSE 0 END), 0) AS approved,
+            COALESCE(SUM(CASE WHEN r.status IN ('pending', 'approved') THEN 1 ELSE 0 END), 0) AS open_total,
+            COALESCE(SUM((SELECT COUNT(*) FROM request_supporters s WHERE s.request_id = r.id)), 0) AS total_supporters
+        FROM requests r
+        {where}
+        """,
+        params,
+    ).fetchone()
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": math.ceil(total / limit) if total > 0 else 1,
+        "summary": dict(summary_row) if summary_row else {
+            "total": 0,
+            "pending": 0,
+            "approved": 0,
+            "open_total": 0,
+            "total_supporters": 0,
+        },
+    }
+
+
 def get_all_requests(
     conn: sqlite3.Connection,
     status: str | None = None,

@@ -40,6 +40,32 @@ async def get_my_requests(
     return request_service.get_user_requests(db, user["user_id"], status, page, limit)
 
 
+@router.get("/household")
+async def get_household_queue(
+    status: str = Query("open"),
+    media_type: str | None = Query(None, pattern="^(movie|tv|book)$"),
+    q: str | None = Query(None, max_length=120),
+    sort: str = Query("priority", pattern="^(priority|supporters|newest|oldest)$"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    try:
+        return request_service.get_household_queue(
+            db,
+            user_id=user["user_id"],
+            status=status,
+            media_type=media_type,
+            search=q,
+            page=page,
+            limit=limit,
+            sort=sort,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{request_id}", response_model=RequestResponse)
 async def get_request(
     request_id: int,

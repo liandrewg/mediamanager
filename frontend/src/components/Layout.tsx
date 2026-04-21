@@ -8,6 +8,7 @@ const navItems = [
   { to: '/', label: 'Dashboard' },
   { to: '/search', label: 'Search' },
   { to: '/library', label: 'Library' },
+  { to: '/household-queue', label: 'Household Queue' },
   { to: '/my-requests', label: 'My Requests' },
   { to: '/notifications', label: 'Updates' },
   { to: '/report', label: 'Report Issue' },

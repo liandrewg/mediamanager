@@ -118,5 +118,103 @@ class RequestTimelineRouteTests(unittest.TestCase):
         self.assertEqual(response.json()['detail'], 'Access denied')
 
 
+class HouseholdQueueRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                poster_path TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                jellyfin_item_id TEXT
+            );
+
+            CREATE TABLE request_supporters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(request_id, user_id)
+            );
+
+            CREATE TABLE request_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE sla_policy (
+                id INTEGER PRIMARY KEY,
+                target_days INTEGER NOT NULL,
+                warning_days INTEGER NOT NULL,
+                updated_at TEXT
+            );
+
+            INSERT INTO sla_policy (id, target_days, warning_days, updated_at)
+            VALUES (1, 7, 2, '2026-04-01T00:00:00+00:00');
+            """
+        )
+        self.conn.execute(
+            "INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at) VALUES ('owner-1', 'Alice', 101, 'movie', 'The Matrix', 'approved', '2026-04-01T00:00:00+00:00', '2026-04-01T00:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO requests (user_id, username, tmdb_id, media_type, title, status, created_at, updated_at) VALUES ('owner-2', 'Casey', 202, 'tv', 'Severance', 'pending', '2026-04-02T00:00:00+00:00', '2026-04-02T00:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'viewer-1', 'Bob', '2026-04-01T00:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (1, 'owner-1', 'Alice', '2026-04-01T00:00:00+00:00')"
+        )
+        self.conn.execute(
+            "INSERT INTO request_supporters (request_id, user_id, username, created_at) VALUES (2, 'owner-2', 'Casey', '2026-04-02T00:00:00+00:00')"
+        )
+        self.conn.commit()
+
+        self.app = FastAPI()
+        self.app.include_router(requests.router, prefix='/api/requests')
+
+        def override_db():
+            yield self.conn
+
+        async def override_user():
+            return {'user_id': 'viewer-1', 'username': 'Bob', 'is_admin': False}
+
+        self.app.dependency_overrides[get_db] = override_db
+        self.app.dependency_overrides[get_current_user] = override_user
+        self.client = TestClient(self.app)
+
+    def tearDown(self):
+        self.client.close()
+        self.app.dependency_overrides.clear()
+        self.conn.close()
+
+    def test_household_queue_returns_open_requests_for_logged_in_user(self):
+        response = self.client.get('/api/requests/household?status=open')
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['summary']['open_total'], 2)
+        self.assertEqual(len(body['items']), 2)
+        self.assertEqual(body['items'][0]['title'], 'The Matrix')
+        self.assertTrue(body['items'][0]['user_supporting'])
+        self.assertEqual(body['items'][1]['queue_position'], 2)
+
+
 if __name__ == '__main__':
     unittest.main()
