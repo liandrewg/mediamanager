@@ -36,6 +36,7 @@ import { useAuth } from '../context/AuthContext'
 import RequestBadge from '../components/RequestBadge'
 import StatsCard from '../components/StatsCard'
 import RequestComments from '../components/RequestComments'
+import FulfillmentLinkRecoveryPanel from '../components/FulfillmentLinkRecoveryPanel'
 
 const COLUMNS = [
   { key: 'pending', label: 'Pending', color: 'border-yellow-500', bg: 'bg-yellow-500/10' },
@@ -798,6 +799,16 @@ export default function AdminPage() {
             <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
               ⚠ Queue aging alert: {stats?.open_over_7_days || 0} open request{(stats?.open_over_7_days || 0) === 1 ? '' : 's'} over 7 days old.
             </div>
+          )}
+
+          {!isLoading && allRequests.length > 0 && (
+            <FulfillmentLinkRecoveryPanel
+              items={allRequests}
+              onLinked={() => {
+                queryClient.invalidateQueries({ queryKey: ['adminRequests'] })
+                queryClient.invalidateQueries({ queryKey: ['myRequests'] })
+              }}
+            />
           )}
 
           {!isLoading && requestReviewLoop && requestReviewLoop.summary.total > 0 && (
