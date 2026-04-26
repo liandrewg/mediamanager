@@ -37,6 +37,7 @@ import RequestBadge from '../components/RequestBadge'
 import StatsCard from '../components/StatsCard'
 import RequestComments from '../components/RequestComments'
 import FulfillmentLinkRecoveryPanel from '../components/FulfillmentLinkRecoveryPanel'
+import SeriesContinuationPanel from '../components/SeriesContinuationPanel'
 
 const COLUMNS = [
   { key: 'pending', label: 'Pending', color: 'border-yellow-500', bg: 'bg-yellow-500/10' },
@@ -810,6 +811,8 @@ export default function AdminPage() {
               }}
             />
           )}
+
+          <SeriesContinuationPanel />
 
           {!isLoading && requestReviewLoop && requestReviewLoop.summary.total > 0 && (
             <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-4">

@@ -319,4 +319,31 @@ def init_db():
     """)
     conn.commit()
 
+    # Migration: add series_continuation_snapshots table.
+    # Tracks the season count snapshot we observed at the time a TV request
+    # was fulfilled (or last reviewed), so we can detect when new seasons
+    # have aired since and proactively surface them to admins.
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS series_continuation_snapshots (
+            tmdb_id              INTEGER PRIMARY KEY,
+            title                TEXT NOT NULL,
+            poster_path          TEXT,
+            last_seen_seasons    INTEGER NOT NULL DEFAULT 0,
+            last_aired_seasons   INTEGER NOT NULL DEFAULT 0,
+            tmdb_status          TEXT,
+            last_air_date        TEXT,
+            fulfilled_at         TIMESTAMP,
+            checked_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            dismissed_through    INTEGER NOT NULL DEFAULT 0,
+            dismissed_at         TIMESTAMP,
+            dismissed_by         TEXT,
+            created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_series_continuation_checked_at
+            ON series_continuation_snapshots(checked_at);
+    """)
+    conn.commit()
+
     conn.close()

@@ -16,7 +16,9 @@ from app.schemas import (
     DuplicateMergeResponse,
 )
 from app.services import request_service
+from app.services import series_continuation_service
 from app.services.jellyfin_client import jellyfin_client
+from app.services.tmdb_client import tmdb_client
 
 router = APIRouter()
 
@@ -478,6 +480,75 @@ async def bulk_escalate_sla_worklist(
         changed_by=admin["user_id"],
         note=body.note,
     )
+
+
+# --- Series Continuation Radar ---
+
+
+class ContinuationDismissRequest(BaseModel):
+    through_seasons: int | None = Field(None, ge=0)
+
+
+@router.get("/series-continuation")
+async def get_series_continuation_radar(
+    refresh: bool = Query(False),
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    """Return TV shows the household has fulfilled but where new seasons
+    have aired since.
+
+    Pass ?refresh=true to fetch fresh TMDB data for stale snapshots before
+    returning the radar; otherwise the cached snapshot data is used.
+    """
+    refresh_summary = None
+    if refresh:
+        refresh_summary = await series_continuation_service.refresh_radar(
+            db,
+            tmdb_client.get_tv_details,
+            only_stale=True,
+        )
+    candidates = series_continuation_service.list_radar_candidates(db)
+    return {
+        "candidates": candidates,
+        "count": len(candidates),
+        "refresh": refresh_summary,
+    }
+
+
+@router.post("/series-continuation/{tmdb_id}/queue")
+async def queue_series_continuation(
+    tmdb_id: int,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    try:
+        return series_continuation_service.queue_continuation(
+            db,
+            tmdb_id=tmdb_id,
+            admin_user_id=admin["user_id"],
+            admin_username=admin.get("username") or "admin",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/series-continuation/{tmdb_id}/dismiss")
+async def dismiss_series_continuation(
+    tmdb_id: int,
+    body: ContinuationDismissRequest,
+    admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    try:
+        return series_continuation_service.dismiss_continuation(
+            db,
+            tmdb_id=tmdb_id,
+            admin_user_id=admin["user_id"],
+            through_seasons=body.through_seasons,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/jellyfin/scan")
