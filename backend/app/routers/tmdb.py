@@ -3,10 +3,10 @@ import httpx
 import logging
 
 from app.dependencies import get_current_user
-from app.schemas import TMDBSearchResult, TMDBMovieDetail, TMDBTvDetail
+from app.schemas import TMDBSearchResult, TMDBMovieDetail, TMDBTvDetail, RequestPreflight
 from app.services.tmdb_client import tmdb_client
 from app.services.jellyfin_client import jellyfin_client
-from app.services.request_service import get_request_for_tmdb, get_community_request
+from app.services.request_service import get_request_for_tmdb, get_community_request, compute_preflight
 from app.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,21 @@ router = APIRouter()
 
 async def check_in_library(user: dict, title: str, tmdb_id: int, media_type: str) -> bool:
     """Check if a title exists in the Jellyfin library by searching and matching TMDB ID."""
+    item_id = await find_library_item_id(user, title, tmdb_id, media_type)
+    return item_id is not None
+
+
+async def find_library_item_id(
+    user: dict, title: str, tmdb_id: int, media_type: str
+) -> str | None:
+    """Resolve the Jellyfin item id for a given (title, tmdb_id, media_type).
+
+    Returns None if the title isn't on the server. Used by both the simple
+    in-library check and the preflight endpoint (which wants the id so it
+    can hand back a watch URL).
+    """
+    if media_type not in {"movie", "tv"}:
+        return None
     try:
         item_type = "Movie" if media_type == "movie" else "Series"
         data = await jellyfin_client.get_items(
@@ -27,11 +42,11 @@ async def check_in_library(user: dict, title: str, tmdb_id: int, media_type: str
         for item in data.get("Items", []):
             provider_ids = item.get("ProviderIds", {})
             if str(provider_ids.get("Tmdb", "")) == str(tmdb_id):
-                return True
-        return False
+                return item.get("Id")
+        return None
     except Exception:
         logger.debug("Failed to check Jellyfin library for %s", title)
-        return False
+        return None
 
 
 @router.get("/search")
@@ -172,3 +187,60 @@ async def get_tv_show(
         user_supporting=community_request["user_supporting"] if community_request else False,
         already_in_library=in_library,
     )
+
+
+@router.get("/preflight/{media_type}/{tmdb_id}", response_model=RequestPreflight)
+async def get_request_preflight(
+    media_type: str,
+    tmdb_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Pre-submit preflight report for the requester.
+
+    Combines:
+      * Library presence (and watch URL if the title is already on the server).
+      * Existing community request status (supporters, ETA, queue position).
+      * Recently-fulfilled detection (you missed it, it was added X days ago).
+      * A personalized verdict + recommended next action.
+
+    The goal is to give the requester one transparent picture *before* they
+    click "request", reducing duplicate fragmentation and DM chaos.
+    """
+    if media_type not in {"movie", "tv", "book"}:
+        raise HTTPException(status_code=400, detail="Unsupported media_type")
+
+    # Resolve canonical title from TMDB so we can search Jellyfin reliably.
+    title: str = ""
+    if media_type == "movie":
+        try:
+            data = await tmdb_client.get_movie_details(tmdb_id)
+            title = data.get("title", "") or ""
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Title not found")
+            raise HTTPException(status_code=502, detail="TMDB API error")
+    elif media_type == "tv":
+        try:
+            data = await tmdb_client.get_tv_details(tmdb_id)
+            title = data.get("name", "") or ""
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Title not found")
+            raise HTTPException(status_code=502, detail="TMDB API error")
+
+    library_item_id: str | None = None
+    in_library = False
+    if media_type in {"movie", "tv"} and title:
+        library_item_id = await find_library_item_id(user, title, tmdb_id, media_type)
+        in_library = library_item_id is not None
+
+    payload = compute_preflight(
+        db,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+        user_id=user["user_id"],
+        in_library=in_library,
+        library_jellyfin_item_id=library_item_id,
+    )
+    return payload

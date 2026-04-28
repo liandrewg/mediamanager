@@ -237,3 +237,55 @@ class BacklogUpdate(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     admin_note: Optional[str] = None
+
+
+# --- Request Preflight ---
+class PreflightVerdict(BaseModel):
+    code: str
+    headline: str
+    detail: Optional[str] = None
+    primary_action: str
+    primary_action_url: Optional[str] = None
+    primary_action_label: Optional[str] = None
+    request_disabled: bool = False
+
+
+class PreflightCommunityRequest(BaseModel):
+    id: int
+    status: str
+    supporter_count: int = 0
+    user_supporting: bool = False
+    is_owner: bool = False
+    days_open: int = 0
+    created_at: str
+    queue_position: Optional[int] = None
+    queue_size: Optional[int] = None
+
+
+class PreflightEta(BaseModel):
+    start_days: int
+    end_days: int
+    label: str
+    confidence: Optional[str] = None
+    source: Optional[str] = None
+    sample_size: Optional[int] = None
+
+
+class PreflightRecentlyFulfilled(BaseModel):
+    request_id: int
+    title: str
+    fulfilled_at: str
+    age_days: int
+    jellyfin_item_id: Optional[str] = None
+    watch_url: Optional[str] = None
+
+
+class RequestPreflight(BaseModel):
+    tmdb_id: int
+    media_type: str
+    in_library: bool
+    library_watch_url: Optional[str] = None
+    community_request: Optional[PreflightCommunityRequest] = None
+    eta: Optional[PreflightEta] = None
+    recently_fulfilled: Optional[PreflightRecentlyFulfilled] = None
+    verdict: PreflightVerdict

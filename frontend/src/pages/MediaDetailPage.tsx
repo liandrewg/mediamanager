@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getMovieDetails, getTvDetails } from '../api/tmdb'
 import { createRequest } from '../api/requests'
 import RequestBadge from '../components/RequestBadge'
+import PreflightCard from '../components/PreflightCard'
 import Spinner from '../components/Spinner'
 
 const TMDB_IMG = 'https://image.tmdb.org/t/p'
@@ -90,8 +91,13 @@ export default function MediaDetailPage({ mediaType }: Props) {
 
           {data.overview && <p className="mt-4 text-slate-300 leading-relaxed">{data.overview}</p>}
 
+          {/* Preflight: tells the user what will happen if they click "request" */}
+          <div className="mt-6">
+            <PreflightCard mediaType={mediaType} tmdbId={id} />
+          </div>
+
           {/* Action buttons */}
-          <div className="mt-6 space-y-3">
+          <div className="mt-4 space-y-3">
             <div className="flex flex-wrap items-center gap-4">
               {data.already_in_library && (
                 <span className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium">

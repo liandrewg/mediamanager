@@ -2409,3 +2409,299 @@ def get_community_request(
     if not row:
         return None
     return _serialize_request(conn, row, user_id)
+
+
+# ---------------------------------------------------------------------------
+# Request Preflight
+#
+# Goal: when a user lands on a media detail page, give them a single,
+# transparent picture of what would happen if they hit "request" — before
+# they hit it. This trims duplicate fragmentation at the source and
+# eliminates "did anyone already ask for this?" DM chaos.
+#
+# Inputs are deliberately minimal so the route can stay fast and cache
+# friendly. The library-presence flag and Jellyfin item id are passed in
+# (the router already resolves those against Jellyfin when answering).
+# ---------------------------------------------------------------------------
+
+
+def _format_eta_window(
+    *,
+    days_open: int,
+    fulfillment_window: dict | None,
+) -> dict | None:
+    """Translate an estimator window into a {start_days,end_days,label,confidence}
+    payload that can be rendered without further math on the client."""
+    if not fulfillment_window:
+        return None
+    p50 = float(fulfillment_window.get("p50_days") or 0)
+    p80 = float(fulfillment_window.get("p80_days") or p50)
+    remaining_start = max(int(round(p50)) - days_open, 0)
+    remaining_end = max(int(math.ceil(p80)) - days_open, remaining_start)
+    if remaining_start == 0 and remaining_end == 0:
+        label = "Likely available any day now"
+    elif remaining_start == remaining_end:
+        label = f"Likely available in ~{remaining_end}d"
+    else:
+        label = f"Likely available in {remaining_start}-{remaining_end}d"
+    return {
+        "start_days": remaining_start,
+        "end_days": remaining_end,
+        "label": label,
+        "confidence": fulfillment_window.get("confidence"),
+        "source": fulfillment_window.get("source"),
+        "sample_size": fulfillment_window.get("sample_size"),
+    }
+
+
+def _recently_fulfilled_for_tmdb(
+    conn: sqlite3.Connection,
+    tmdb_id: int,
+    media_type: str,
+    *,
+    within_days: int = 30,
+) -> dict | None:
+    """Return a small payload describing the most recent fulfilled request
+    for (tmdb_id, media_type) within the lookback window, or None.
+
+    This is what powers the "you missed it — added 5 days ago" hint."""
+    try:
+        row = conn.execute(
+            """
+            SELECT r.id, r.title, r.jellyfin_item_id, rh.created_at AS fulfilled_at
+            FROM request_history rh
+            JOIN requests r ON r.id = rh.request_id
+            WHERE rh.new_status = 'fulfilled'
+              AND r.tmdb_id = ?
+              AND r.media_type = ?
+            ORDER BY rh.created_at DESC
+            LIMIT 1
+            """,
+            (tmdb_id, media_type),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row:
+        return None
+    fulfilled_dt = _parse_request_datetime(row["fulfilled_at"])
+    age_days = (datetime.now(timezone.utc) - fulfilled_dt).days
+    if age_days > within_days:
+        return None
+    payload = {
+        "request_id": row["id"],
+        "title": row["title"],
+        "fulfilled_at": row["fulfilled_at"],
+        "age_days": age_days,
+        "jellyfin_item_id": row["jellyfin_item_id"],
+        "watch_url": None,
+    }
+    if row["jellyfin_item_id"]:
+        base = settings.jellyfin_url.rstrip("/")
+        payload["watch_url"] = f"{base}/web/index.html#!/details?id={row['jellyfin_item_id']}"
+    return payload
+
+
+def _verdict_for_preflight(
+    *,
+    in_library: bool,
+    library_watch_url: str | None,
+    community_request: dict | None,
+    user_supporting: bool,
+    is_owner: bool,
+    recently_fulfilled: dict | None,
+) -> dict:
+    """Compute the personalized verdict + recommended action for the
+    requester. Verdict codes are stable strings the client can map to
+    icons/colors; copy is human-friendly."""
+    if in_library:
+        return {
+            "code": "watch_now",
+            "headline": "Already in your library",
+            "detail": "This title is on the server. No request needed.",
+            "primary_action": "watch",
+            "primary_action_url": library_watch_url,
+            "primary_action_label": "Watch now" if library_watch_url else None,
+            "request_disabled": True,
+        }
+
+    if recently_fulfilled and not community_request:
+        # Title was added recently and the user simply missed the notification.
+        days = recently_fulfilled.get("age_days", 0)
+        when = "today" if days == 0 else (f"{days} day{'s' if days != 1 else ''} ago")
+        return {
+            "code": "recently_added",
+            "headline": f"Added {when}",
+            "detail": "This was fulfilled from a previous request. Likely on the server already.",
+            "primary_action": "watch" if recently_fulfilled.get("watch_url") else "request",
+            "primary_action_url": recently_fulfilled.get("watch_url"),
+            "primary_action_label": "Open in Jellyfin" if recently_fulfilled.get("watch_url") else "Request anyway",
+            "request_disabled": False,
+        }
+
+    if community_request:
+        status = community_request.get("status")
+        supporters = community_request.get("supporter_count", 0)
+        if user_supporting:
+            return {
+                "code": "already_supporting",
+                "headline": (
+                    "You already support this request"
+                    if not is_owner
+                    else "You requested this"
+                ),
+                "detail": (
+                    f"Status: {status}. {supporters} supporter{'s' if supporters != 1 else ''}."
+                ),
+                "primary_action": "view_request",
+                "primary_action_url": None,
+                "primary_action_label": "View your request",
+                "request_disabled": True,
+            }
+        join_label = "Join request" if status == "pending" else "Add your support"
+        detail = (
+            f"{supporters} household member{'s' if supporters != 1 else ''} already asked. "
+            f"Joining bumps its priority."
+        )
+        return {
+            "code": "join_queue",
+            "headline": (
+                "Already requested — pending approval"
+                if status == "pending"
+                else "Already approved — in the fulfillment queue"
+            ),
+            "detail": detail,
+            "primary_action": "join",
+            "primary_action_url": None,
+            "primary_action_label": join_label,
+            "request_disabled": False,
+        }
+
+    return {
+        "code": "fresh_request",
+        "headline": "Be the first to request this",
+        "detail": "No one has asked for this yet. Submitting will create a new request.",
+        "primary_action": "request",
+        "primary_action_url": None,
+        "primary_action_label": "Request",
+        "request_disabled": False,
+    }
+
+
+def compute_preflight(
+    conn: sqlite3.Connection,
+    *,
+    tmdb_id: int,
+    media_type: str,
+    user_id: str,
+    in_library: bool,
+    library_jellyfin_item_id: str | None = None,
+) -> dict:
+    """Build a complete preflight report for (tmdb_id, media_type, user).
+
+    The router resolves library presence (and ideally the Jellyfin item id)
+    against Jellyfin and passes the answer in. This function does the
+    SQLite-side work: existing-request lookup, ETA window, supporters-ahead,
+    recently-fulfilled detection, and the personalized verdict.
+    """
+    if media_type not in {"movie", "tv", "book"}:
+        raise ValueError(f"Unsupported media_type: {media_type}")
+
+    library_watch_url: str | None = None
+    if in_library and library_jellyfin_item_id:
+        base = settings.jellyfin_url.rstrip("/")
+        library_watch_url = f"{base}/web/index.html#!/details?id={library_jellyfin_item_id}"
+
+    community_request_row = conn.execute(
+        """
+        SELECT *
+        FROM requests
+        WHERE tmdb_id = ?
+          AND media_type = ?
+          AND status IN ('pending', 'approved')
+        ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END, created_at ASC
+        LIMIT 1
+        """,
+        (tmdb_id, media_type),
+    ).fetchone()
+
+    community_request: dict | None = None
+    eta: dict | None = None
+    queue_position: int | None = None
+    queue_size: int | None = None
+    user_supporting = False
+    is_owner = False
+
+    if community_request_row:
+        community_request = _serialize_request(conn, community_request_row, user_id)
+        user_supporting = bool(community_request.get("user_supporting"))
+        is_owner = bool(community_request.get("is_owner"))
+
+        if community_request.get("status") == "approved":
+            window = _estimate_fulfillment_window_for_media_type(conn, media_type)
+            eta = _format_eta_window(
+                days_open=community_request.get("days_open", 0),
+                fulfillment_window=window,
+            )
+            # Approximate queue position by counting older still-approved
+            # requests (created earlier and not yet fulfilled/denied).
+            queue_size_row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM requests
+                WHERE media_type = ? AND status = 'approved'
+                """,
+                (media_type,),
+            ).fetchone()
+            queue_size = int(queue_size_row["c"]) if queue_size_row else None
+
+            ahead_row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM requests
+                WHERE media_type = ?
+                  AND status = 'approved'
+                  AND created_at < ?
+                """,
+                (media_type, community_request_row["created_at"]),
+            ).fetchone()
+            queue_position = (int(ahead_row["c"]) + 1) if ahead_row else None
+
+    recently_fulfilled = None
+    if not in_library and not community_request:
+        recently_fulfilled = _recently_fulfilled_for_tmdb(
+            conn, tmdb_id, media_type, within_days=30
+        )
+
+    verdict = _verdict_for_preflight(
+        in_library=in_library,
+        library_watch_url=library_watch_url,
+        community_request=community_request,
+        user_supporting=user_supporting,
+        is_owner=is_owner,
+        recently_fulfilled=recently_fulfilled,
+    )
+
+    # Trim community_request to the fields the client needs (avoid leaking
+    # the full owner email/admin notes to non-supporters).
+    community_payload: dict | None = None
+    if community_request:
+        community_payload = {
+            "id": community_request.get("id"),
+            "status": community_request.get("status"),
+            "supporter_count": community_request.get("supporter_count", 0),
+            "user_supporting": user_supporting,
+            "is_owner": is_owner,
+            "days_open": community_request.get("days_open", 0),
+            "created_at": community_request.get("created_at"),
+            "queue_position": queue_position,
+            "queue_size": queue_size,
+        }
+
+    return {
+        "tmdb_id": tmdb_id,
+        "media_type": media_type,
+        "in_library": in_library,
+        "library_watch_url": library_watch_url,
+        "community_request": community_payload,
+        "eta": eta,
+        "recently_fulfilled": recently_fulfilled,
+        "verdict": verdict,
+    }
